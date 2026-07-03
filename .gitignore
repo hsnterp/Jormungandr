@@ -1,0 +1,20 @@
+# data / model artifacts
+data/
+!data/.gitkeep
+checkpoints/
+outputs/
+*.onnx
+*.pt
+*.pth
+*.ckpt
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# os
+.DS_Store

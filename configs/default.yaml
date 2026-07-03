@@ -1,0 +1,129 @@
+# seismic-edge-picker — default configuration
+# All phases read from this file. Values here are the reproducible defaults.
+
+seed: 42
+
+# ----------------------------------------------------------------------------
+# PHASE 1 — data pipeline
+# ----------------------------------------------------------------------------
+data:
+  dataset: STEAD
+  sampling_rate: 100        # Hz
+  window_samples: 6000      # 60 s * 100 Hz
+  n_channels: 3
+  cache_dir: data           # SeisBench data cache / derived artifacts
+
+  # Subset size (STEAD is huge; start small). Tunable per the task spec.
+  subset:
+    n_earthquake: 50000
+    n_noise: 25000
+
+  # Preprocessing (applied to every trace, train + eval)
+  preprocess:
+    demean: true
+    bandpass:
+      apply: true
+      freqmin: 1.0
+      freqmax: 45.0
+      order: 4
+    normalization: std       # "std" (per-trace) or "max"
+    eps: 1.0e-8
+
+  # Label-mask generation from arrival sample indices
+  labels:
+    pick_sigma_s: 0.25       # Gaussian pick bump std, seconds (~0.2-0.3s)
+    # Detection window right edge: "coda" uses coda_end_sample when present,
+    # falling back to S + detection_fallback_s, then P + detection_fallback_s.
+    detection_source: coda
+    detection_fallback_s: 10.0
+    detection_pad_s: 0.0     # symmetric pad added to detection window edges
+
+  # Train/val/test split — grouped so no station/event leaks across splits
+  split:
+    by: event                # group key: "event" (source_id) w/ station fallback
+    ratios: [0.8, 0.1, 0.1]  # train / val / test
+    hash_mod: 1000
+
+# Augmentations — TRAINING ONLY (dataset applies these when train=True)
+augment:
+  enabled: true
+  window_shift:
+    enabled: true
+    max_shift_s: 15.0        # arrivals can land anywhere in the window
+  noise_mixing:
+    enabled: true
+    prob: 0.5
+    target_snr_db: [-5.0, 15.0]   # uniform range for synthesized low-SNR
+  channel_dropout:
+    enabled: true
+    prob: 0.2
+    max_channels: 1
+
+# ----------------------------------------------------------------------------
+# PHASE 2 — model (1D U-Net, <300k params, quantization-friendly ops)
+# ----------------------------------------------------------------------------
+model:
+  stem_channels: 16
+  encoder_channels: [16, 32, 64, 96]
+  kernel_size: 7
+  bottleneck_dilations: [2, 4]
+  out_channels: 3
+
+# ----------------------------------------------------------------------------
+# PHASE 3 — training
+# ----------------------------------------------------------------------------
+train:
+  device: cuda               # training only; all deploy code is CPU-only
+  batch_size: 64
+  epochs: 50
+  num_workers: 4
+  optimizer: adam
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  scheduler: cosine
+  grad_clip: 1.0
+  loss:
+    # per-stream weights; P and S weighted ~5x vs detection
+    stream_weights:
+      detection: 1.0
+      p: 5.0
+      s: 5.0
+  overfit:                   # sanity check before full training
+    n_traces: 100
+    epochs: 1000
+    lr: 3.0e-3               # higher LR: full-batch memorization test
+  checkpoint_dir: checkpoints
+  log_dir: outputs
+
+distill:
+  enabled: true
+  teacher: EQTransformer
+  teacher_pretrained: stead
+  cache_dir: data/teacher_cache
+  blend_ratio: 0.5           # weight on teacher soft targets vs hard labels
+
+# ----------------------------------------------------------------------------
+# PHASE 4 — evaluation
+# ----------------------------------------------------------------------------
+eval:
+  detection_threshold: 0.5
+  peak_height: 0.3           # min prob for a pick peak
+  peak_min_distance_s: 1.0
+  match_tolerance_s: 0.5     # detection TP window
+  snr_buckets: [-100, 0, 10, 20, 100]   # dB bin edges
+
+# ----------------------------------------------------------------------------
+# PHASE 5 — deployment prep (CPU-only)
+# ----------------------------------------------------------------------------
+deploy:
+  onnx_path: outputs/model.onnx
+  opset: 17
+  quant:
+    calibration_traces: 500
+    keep_head_fp32: true     # fallback if picks degrade under INT8
+  benchmark:
+    n_runs: 200
+    threads: 1
+  streaming:
+    window_s: 60
+    hop_s: 30

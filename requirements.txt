@@ -1,0 +1,10 @@
+# Core (training + inference). Deploy code (onnx*) is CPU-only.
+torch
+seisbench
+numpy
+scipy
+matplotlib
+pyyaml
+onnx
+onnxruntime
+pytest

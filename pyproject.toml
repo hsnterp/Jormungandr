@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seismic-edge-picker"
+version = "0.1.0"
+description = "Compact, edge-deployable seismic event detector and phase picker (STEAD, distilled from EQTransformer, INT8-ready)."
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "seisbench",
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "pyyaml",
+    "onnx",
+    "onnxruntime",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
