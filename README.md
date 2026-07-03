@@ -94,11 +94,13 @@ seismic-edge-picker/
 │   ├── labels.py               # arrival samples → (3,6000) target masks
 │   ├── augment.py              # window-shift, noise-mix, channel-dropout (train)
 │   ├── splits.py               # grouped, leakage-free train/val/test split
-│   ├── dataset.py              # SeisBench/STEAD torch Dataset (lazy download)
+│   ├── dataset.py              # cached-only SeisBench/STEAD torch Dataset
+│   ├── losses.py               # weighted per-stream BCE
 │   └── model.py                # 1D U-Net + param/FLOP counters
 ├── scripts/
 │   ├── inspect_model.py        # Phase 2 verification (param count + MFLOPs)
-│   └── sanity_check_data.py    # Phase 1 verification (plot traces + labels)
+│   ├── sanity_check_data.py    # Phase 1 verification (plot traces + labels)
+│   └── train.py                # Stage-1 training + tiny smoke mode
 ├── tests/                      # pytest sanity tests (run without the dataset)
 ├── notes/PROGRESS.md           # phase-by-phase status + handoff notes
 └── configs / data / checkpoints / outputs
@@ -125,6 +127,12 @@ pytest -q
 # Phase 1 — visualize traces + label masks (needs STEAD cached locally)
 python scripts/sanity_check_data.py --config configs/default.yaml \
     --n 5 --split train --out outputs/sanity_labels.png
+
+# Stage 1 smoke test (16 train + 8 val traces, one epoch)
+python scripts/train.py --config configs/default.yaml --smoke-test
+
+# Full Stage 1 (50 epochs configured; requires explicit approval before launch)
+python scripts/train.py --config configs/default.yaml
 ```
 
 ## Roadmap / status
@@ -133,7 +141,7 @@ python scripts/sanity_check_data.py --config configs/default.yaml \
 |---|---|---|
 | 1 | data pipeline (preprocess, labels, augment, grouped split, sanity plot) | ✅ complete & verified on STEAD |
 | 2 | 1D U-Net (<300k params, quant-friendly) | ✅ complete & verified |
-| 3 | training (supervised BCE → EQT distillation) | not started |
+| 3 | training (supervised BCE → EQT distillation) | overfit + Stage-1 smoke passed; full run pending |
 | 4 | evaluation (F1, pick MAE/std in ms, SNR buckets, EQT comparison) | not started |
 | 5 | deployment (ONNX, INT8, latency bench, streaming) | not started |
 

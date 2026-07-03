@@ -11,6 +11,7 @@ Flow per item:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Dict, Optional
 
 import numpy as np
@@ -23,11 +24,36 @@ from .preprocessing import filter_only, normalize
 from . import splits as S
 
 
+def stead_cache_paths() -> tuple[Path, Path]:
+    """Return the metadata and waveform paths used by SeisBench for STEAD."""
+    import seisbench
+
+    root = Path(seisbench.cache_root) / "datasets" / "stead"
+    return root / "metadata.csv", root / "waveforms.hdf5"
+
+
+def require_stead_cache() -> tuple[Path, Path]:
+    """Refuse to instantiate STEAD unless its local cache is complete.
+
+    This prevents a training or inspection command from accidentally starting
+    the roughly 90 GB dataset download.
+    """
+    paths = stead_cache_paths()
+    missing = [str(path) for path in paths if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            "STEAD cache is incomplete; refusing to trigger a download. "
+            f"Missing: {', '.join(missing)}"
+        )
+    return paths
+
+
 def load_stead(cfg):
-    """Instantiate the SeisBench STEAD dataset. Triggers a download if the
-    cache is absent. Kept out of import path on purpose."""
+    """Instantiate STEAD, optionally requiring a complete existing cache."""
     import seisbench.data as sbd
 
+    if getattr(cfg.data, "require_cached", True):
+        require_stead_cache()
     return sbd.STEAD(
         sampling_rate=cfg.data.sampling_rate,
         cache="trace",
@@ -79,10 +105,15 @@ class SeismicDataset(Dataset):
         self.n_channels = cfg.data.n_channels
         self.n_samples = cfg.data.window_samples
         self.base_seed = seed
+        self.epoch = 0
         self.metadata = ds.metadata
 
     def __len__(self) -> int:
         return len(self.rows)
+
+    def set_epoch(self, epoch: int) -> None:
+        """Vary deterministic train augmentations from one epoch to the next."""
+        self.epoch = int(epoch)
 
     def _noise_sampler(self, rng):
         """Return a callable that draws a filtered noise waveform for mixing."""
@@ -98,9 +129,9 @@ class SeismicDataset(Dataset):
 
     def __getitem__(self, i: int):
         row = int(self.rows[i])
-        # per-item RNG => deterministic given (epoch-independent) index; good
-        # enough for reproducibility while still varying across the dataset.
-        rng = np.random.default_rng(self.base_seed + row)
+        # Per-item/epoch RNG keeps runs reproducible while refreshing training
+        # augmentations each epoch.
+        rng = np.random.default_rng(self.base_seed + row + self.epoch * 1_000_003)
 
         wf = _get_waveform(self.ds, row, self.n_channels, self.n_samples)
         meta = self.metadata.iloc[row]

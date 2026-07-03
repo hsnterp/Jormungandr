@@ -12,6 +12,7 @@ data:
   window_samples: 6000      # 60 s * 100 Hz
   n_channels: 3
   cache_dir: data           # SeisBench data cache / derived artifacts
+  require_cached: true      # fail instead of starting a STEAD download
 
   # Subset size (STEAD is huge; start small). Tunable per the task spec.
   subset:
@@ -94,6 +95,18 @@ train:
     lr: 3.0e-3               # higher LR: full-batch memorization test
   checkpoint_dir: checkpoints
   log_dir: outputs
+  run_name: stage1
+  metrics_filename: train_metrics.csv
+  loss_curve_filename: train_loss.png
+  min_lr: 1.0e-6
+  early_stopping_patience: 10
+  smoke_test:
+    run_name: stage1_smoke
+    n_train: 16
+    n_val: 8
+    epochs: 1
+    batch_size: 4
+    num_workers: 0
 
 distill:
   enabled: true
