@@ -102,7 +102,13 @@ seismic-edge-picker/
 │   ├── sanity_check_data.py    # Phase 1 verification (plot traces + labels)
 │   ├── train.py                # Stage-1 training + tiny smoke mode
 │   ├── evaluate.py             # Phase 4: F1 + pick residuals on a split
-│   └── threshold_sweep.py      # Phase 4: detection threshold + min-duration sweep
+│   ├── threshold_sweep.py      # Phase 4: detection threshold + min-duration sweep
+│   ├── eqtransformer_baseline.py  # Phase 4: pretrained EQTransformer side-by-side
+│   ├── cache_teacher.py        # Stage 2a: chunked/resumable teacher-output cache
+│   ├── train_distill.py        # Stage 2b: distillation fine-tune (hard+soft blend)
+│   └── distill_smoke.py        # Stage 2: tiny end-to-end cache + 1-epoch smoke
+├── src/seismic_edge_picker/distill.py  # Stage 2 loss + cache + teacher loading
+├── docs/stage2.md              # Stage 2 pipeline, loss, cache format, commands
 ├── tests/                      # pytest sanity tests (run without the dataset)
 ├── notes/PROGRESS.md           # phase-by-phase status + handoff notes
 └── configs / data / checkpoints / outputs
@@ -139,6 +145,10 @@ python scripts/train.py --config configs/default.yaml
 # Phase 4 — evaluate a checkpoint on the test split
 python scripts/evaluate.py --config configs/default.yaml \
     --checkpoint checkpoints/stage1/best.pt --out outputs/stage1_eval
+
+# Stage 2 — tiny distillation smoke (cache ~24 teacher outputs + 1 epoch; cheap)
+python scripts/distill_smoke.py --config configs/default.yaml
+# Full Stage 2 teacher cache + distillation are EXPENSIVE — see docs/stage2.md
 ```
 
 ## Roadmap / status
@@ -147,7 +157,7 @@ python scripts/evaluate.py --config configs/default.yaml \
 |---|---|---|
 | 1 | data pipeline (preprocess, labels, augment, grouped split, sanity plot) | ✅ complete & verified on STEAD |
 | 2 | 1D U-Net (<300k params, quant-friendly) | ✅ complete & verified |
-| 3 | training (supervised BCE → EQT distillation) | Stage 1 complete (50 epochs); Stage 2 distillation not started |
+| 3 | training (supervised BCE → EQT distillation) | Stage 1 complete (50 epochs); Stage 2 distillation **implemented + smoke-tested**, full run not yet launched |
 | 4 | evaluation (F1, pick MAE/std in ms, SNR buckets, EQT comparison) | student evaluated on test split; EQT side-by-side pending |
 | 5 | deployment (ONNX, INT8, latency bench, streaming) | not started |
 
@@ -208,5 +218,46 @@ python scripts/threshold_sweep.py --config configs/default.yaml \
     --checkpoint checkpoints/stage1/best.pt --out outputs/stage1_eval
 ```
 
-_Side-by-side vs pretrained EQTransformer (F1, pick MAE, param count) comes
-with Phase 4 completion and will be inlined here._
+### Side-by-side vs pretrained EQTransformer (teacher)
+
+`scripts/eqtransformer_baseline.py` runs SeisBench's pretrained EQTransformer
+(`stead` weights) on the **identical** test traces with the **identical**
+detection/pick tolerances (`eval.*`), so the numbers line up. Both models are fed
+byte-identical inputs — the project pipeline's demean + bandpass(1–45 Hz) + std
+normalization. All figures at the config-default detection threshold **0.50**:
+
+| model | params | fp32 size | P | R | **F1** | FP (noise) | FN (eq) | P MAE±std | S MAE±std | throughput |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **SeismicUNet** (student, default 0.50) | **48,051** | **0.19 MB** | 0.923 | 1.000 | 0.9597 | 415 | 1 | **46.0±77.4 ms** | **72.4±112.3 ms** | ~660 tr/s |
+| SeismicUNet (student, tuned 0.90+500 ms) | 48,051 | 0.19 MB | 0.989 | 0.996 | **0.9929** | 53 | 18 | 46.0±77.4 ms | 72.4±112.3 ms | ~660 tr/s |
+| EQTransformer (`stead`, 0.50) | 376,935 | 1.51 MB | **0.993** | 0.979 | 0.9860 | **35** | 103 | 62.8±88.4 ms | 78.9±117.5 ms | ~540 tr/s |
+| EQTransformer (`stead`, best-F1 @ 0.15) | 376,935 | 1.51 MB | 0.984 | 0.990 | 0.9867 | 81 | 51 | 62.8±88.4 ms | 78.9±117.5 ms | ~540 tr/s |
+
+Takeaways (on this pipeline / test set): the **7.8×-smaller student is competitive
+with the teacher**. At a matched threshold EQTransformer has far higher raw
+precision (35 vs 415 noise false alarms) but lower recall (misses 103 events vs 1);
+after the free threshold+min-duration postprocessing the student's F1 (0.9929)
+actually edges out EQT's best (0.9867). Pick residuals are *tighter* for the
+student here (P MAE 46 vs 63 ms) — but see the fairness caveats, which make the
+pick comparison **uncharitable to EQT**. Artifacts:
+`outputs/eqtransformer_baseline/` (`eqt_metrics.json`, `threshold_sweep.csv/png`,
+`pick_residuals.png`, `summary.txt`).
+
+**Fairness caveats — do not over-read these numbers:**
+- **Preprocessing:** EQT is fed the project's bandpass(1–45 Hz)+std-normalized
+  inputs, **not** its native preprocessing. This most likely handicaps EQT's pick
+  sharpness; treat its pick MAE as a lower bound on its true capability.
+- **Windowing:** single fixed 60 s windows, no overlap/stacking. EQT's usual
+  `classify()` uses overlapping windows + stacking on continuous streams; both
+  models here run one window at a time (the student's deployment setting).
+- **Thresholds:** EQT's native default detection threshold is 0.1 (swept here;
+  best F1 at 0.15). The 0.50 row matches the student's default for alignment.
+- Labels (STEAD arrival samples), 3-component ZNE order, 100 Hz, and 6000-sample
+  windows are identical for both, so those axes are apples-to-apples.
+
+Run it with:
+
+```bash
+python scripts/eqtransformer_baseline.py --config configs/default.yaml \
+    --out outputs/eqtransformer_baseline
+```

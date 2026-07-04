@@ -108,12 +108,47 @@ train:
     batch_size: 4
     num_workers: 0
 
+# ----------------------------------------------------------------------------
+# STAGE 2 — knowledge distillation from pretrained EQTransformer (teacher)
+# Teacher is used ONLY for soft Detection/P/S streams. Student arch unchanged.
+# ----------------------------------------------------------------------------
 distill:
   enabled: true
   teacher: EQTransformer
   teacher_pretrained: stead
-  cache_dir: data/teacher_cache
-  blend_ratio: 0.5           # weight on teacher soft targets vs hard labels
+  cache_dir: data/teacher_cache   # chunked/resumable teacher-output cache
+  # Blended loss: L = alpha*BCE(student, teacher_soft) + (1-alpha)*BCE(student, hard)
+  alpha: 0.5                 # weight on teacher-soft loss (== blend_ratio)
+  blend_ratio: 0.5           # legacy alias for alpha (alpha is authoritative)
+  temperature: 1.0           # softens the TEACHER target only; 1.0 = no-op
+  # Teacher caching (Stage 2a) — cheap to reload, safe to interrupt/resume
+  max_cache_samples: null    # cap #train traces to cache (null = all 59,116)
+  chunk_size: 512            # traces per cache chunk (the resumable unit)
+  cache_dtype: float16       # probs in [0,1]; fp16 halves disk
+  # Distillation fine-tune (Stage 2b)
+  epochs: 20
+  lr: 5.0e-4
+  run_name: stage2_distill
+  # WARNING: cached teacher outputs were computed on the DETERMINISTIC,
+  # non-augmented train windows. Training MUST use those same windows so each
+  # cached soft target lines up with the student's input. Enabling augmentations
+  # would shift arrivals out from under the cached teacher stream (desync) and is
+  # UNSUPPORTED in this first Stage 2 run — the trainer refuses to start if true.
+  # Augmentation-aware distillation is a FUTURE enhancement (see docs/stage2.md).
+  use_augmentations: false
+  low_snr_weighting:         # simple monotone per-trace upweight of low-SNR eq
+    enabled: false
+    ref_db: 15.0             # weight 1.0 at/above this SNR
+    floor_db: 0.0            # weight max_weight at/below this SNR
+    max_weight: 3.0
+  smoke:                     # tiny end-to-end check (allowed to run)
+    max_cache_samples: 24
+    chunk_size: 8
+    epochs: 1
+    batch_size: 4
+    num_workers: 0
+    n_val: 8                  # val-subset size so the smoke exercises the val pass
+    run_name: stage2_distill_smoke
 
 # ----------------------------------------------------------------------------
 # PHASE 4 — evaluation
