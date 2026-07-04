@@ -107,7 +107,8 @@ seismic-edge-picker/
 │   ├── cache_teacher.py        # Stage 2a: chunked/resumable teacher-output cache
 │   ├── train_distill.py        # Stage 2b: distillation fine-tune (hard+soft blend)
 │   ├── distill_smoke.py        # Stage 2: tiny end-to-end cache + 1-epoch smoke
-│   └── export_onnx.py          # Phase 5: ONNX export + ORT parity check
+│   ├── export_onnx.py          # Phase 5: ONNX export + ORT parity check
+│   └── quantize_onnx.py        # Phase 5b: INT8 static quantization + parity/eval
 ├── src/seismic_edge_picker/distill.py  # Stage 2 loss + cache + teacher loading
 ├── docs/stage2.md              # Stage 2 pipeline, loss, cache format, commands
 ├── tests/                      # pytest sanity tests (run without the dataset)
@@ -168,7 +169,7 @@ python scripts/threshold_sweep.py --config configs/default.yaml \
 | 2 | 1D U-Net (<300k params, quant-friendly) | ✅ complete & verified |
 | 3 | training (supervised BCE → EQT distillation) | ✅ Stage 1 (50 epochs) **and** Stage 2 distillation complete |
 | 4 | evaluation (F1, pick MAE/std in ms, SNR buckets, EQT comparison) | ✅ distilled student evaluated + threshold-tuned; EQT side-by-side done |
-| 5 | deployment (ONNX, INT8, latency bench, streaming) | 🟡 **ONNX export + parity done**; INT8 / latency / streaming next |
+| 5 | deployment (ONNX, INT8, latency bench, streaming) | 🟡 **ONNX export + parity + INT8 quantization done**; latency / streaming next |
 
 See [`docs/PROGRESS.md`](docs/PROGRESS.md) for detailed status and the
 continuation plan.
@@ -329,18 +330,53 @@ python scripts/export_onnx.py --config configs/default.yaml \
   Both are far under the 1e-4 tolerance; the batch-8 run confirms the dynamic
   batch axis. Report saved to `outputs/onnx/stage2_distill_parity.json`.
 
+### ✅ INT8 static quantization + evaluation (done)
+
+`scripts/quantize_onnx.py` calibrates ONNX Runtime static QDQ quantization on
+500 validation traces, compares PyTorch / FP32 ONNX / INT8 ONNX outputs, and
+evaluates FP32 and INT8 ONNX on the test split:
+
+```bash
+python scripts/quantize_onnx.py --config configs/default.yaml \
+    --checkpoint checkpoints/stage2_distill/best.pt \
+    --fp32-onnx outputs/onnx/stage2_distill.onnx \
+    --int8-out outputs/onnx/stage2_distill_int8.onnx \
+    --threshold 0.80
+```
+
+- **Quantization:** QDQ, per-channel QInt8 weights, QUInt8 activations, MinMax
+  calibration. Both full eligible-op INT8 and body-INT8/head-FP32 variants were
+  tested. Detection metrics were identical; full INT8 had marginally lower
+  combined pick MAE and was shipped.
+- **Size:** 0.204 MB FP32 → 0.104 MB INT8: **1.95× smaller, 48.8% reduction**.
+- **FP32 ONNX vs INT8 parity:**
+
+  | input | output shape | max abs err | mean abs err |
+  |---|---|---|---|
+  | dummy `(1,3,6000)` | `(1,3,6000)` | 1.47e-02 | 9.30e-04 |
+  | real test batch `(8,3,6000)` | `(8,3,6000)` | 9.24e-01 | 2.59e-02 |
+
+- **Full test split at the Stage 2 threshold (0.80):**
+
+  | model | detection F1 | precision | recall | FP | FN | P MAE | S MAE |
+  |---|---:|---:|---:|---:|---:|---:|---:|
+  | FP32 ONNX | 0.9944 | 0.9910 | 0.9978 | 45 | 11 | 37.0 ms | 71.4 ms |
+  | INT8 ONNX | 0.9920 | 0.9941 | 0.9899 | 29 | 50 | 45.6 ms | 76.2 ms |
+
+Quantization does not meaningfully hurt this operating point: F1 falls 0.0024,
+P-pick MAE rises 8.7 ms, and S-pick MAE rises 4.8 ms. Reports are saved to
+`outputs/onnx/quantization_report.json` and
+`outputs/stage2_int8_eval/int8_eval.json`.
+
 ### Remaining Phase 5 steps (not started)
 
-1. **INT8 static quantization** — quantize with ONNX Runtime using ~500 validation
-   traces for calibration; report the detection-F1 and pick-MAE delta pre/post
-   quantization. If picks degrade, keep the head in FP32 and quantize only the body.
-2. **Latency benchmark** — ms per 60 s window, single CPU thread, p50/p95 over 200
+1. **Latency benchmark** — ms per 60 s window, single CPU thread, p50/p95 over 200
    runs; dependency-light so it can be re-run on a Raspberry Pi / ARM Graviton.
-3. **Streaming wrapper** — consume a continuous stream in overlapping 60 s / 30 s-hop
+2. **Streaming wrapper** — consume a continuous stream in overlapping 60 s / 30 s-hop
    windows, merge predictions, emit pick timestamps; demo over a long concatenated
    test signal.
 
 The tuned operating points above are the recommended defaults to bake into the
 streaming wrapper (max-F1 thr 0.80, or low-false-alarm thr 0.90 + 500 ms). The
-model uses only INT8-friendly ops (`Conv1d` / `BatchNorm1d` / `ReLU` / NN-upsample),
-so no operator should block quantization.
+model uses only INT8-friendly ops (`Conv1d` / `BatchNorm1d` / `ReLU` /
+NN-upsample).

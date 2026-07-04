@@ -18,7 +18,7 @@ architecture as Stage 1 — distillation only changed the weights.
 | 2 | 1D U-Net (48,051 params, 38.1 MFLOPs, INT8-friendly ops) | ✅ complete & verified |
 | 3 | training — Stage 1 supervised + Stage 2 distillation | ✅ complete |
 | 4 | evaluation — F1 / pick MAE / SNR buckets / EQT baseline / threshold tuning | ✅ complete |
-| 5 | deployment — ONNX → INT8 → latency → streaming | 🟡 ONNX export + parity done; INT8/latency/streaming pending |
+| 5 | deployment — ONNX → INT8 → latency → streaming | 🟡 ONNX export + parity + INT8 quantization done; latency/streaming pending |
 
 **Headline test-split numbers** (7,781 traces: 4,957 eq / 2,824 noise; identical
 split + tolerances across all rows):
@@ -114,6 +114,36 @@ input `waveform` → output `streams`). Parity vs PyTorch (tol 1e-4, PASS):
 dummy `(1,3,6000)` max abs err 1.107e-07 / mean 2.407e-08; real `(8,3,6000)`
 max abs err 7.451e-07 / mean 3.308e-08. Report: `outputs/onnx/stage2_distill_parity.json`.
 
+**INT8 static quantization + parity/eval** (Phase 5b, done):
+```bash
+python scripts/quantize_onnx.py --config configs/default.yaml \
+    --checkpoint checkpoints/stage2_distill/best.pt \
+    --fp32-onnx outputs/onnx/stage2_distill.onnx \
+    --int8-out  outputs/onnx/stage2_distill_int8.onnx --threshold 0.80
+```
+ORT static quant (QDQ, per-channel weights QInt8, activations QUInt8, MinMax
+calibration on **500 val traces**). Quantizes two variants — full INT8 and
+body-INT8/head-FP32 (`/head/Conv` excluded) — evaluates both on the full test
+split and ships the better. Detection metrics were identical; full INT8 had
+marginally lower combined pick MAE, so **full** was shipped.
+`outputs/onnx/stage2_distill_int8.onnx` **0.104 MB** vs FP32 0.204 MB →
+**1.95× smaller (−48.8 %)**.
+
+Full-test eval @ thr 0.80 (7,781 traces; FP32 ONNX row reproduces the headline
+PyTorch numbers exactly, confirming the eval path):
+
+| model | F1 | P | R | FP | FN | P MAE | S MAE |
+|---|---|---|---|---|---|---|---|
+| FP32 ONNX | **0.9944** | 0.9910 | 0.9978 | 45 | 11 | 37.0 ms | 71.4 ms |
+| INT8 ONNX | **0.9920** | 0.9941 | 0.9899 | 29 | 50 | 45.6 ms | 76.2 ms |
+
+Verdict: **no meaningful degradation** — F1 −0.0024 (< 0.005), P MAE +8.7 ms /
+S MAE +4.8 ms (< 10 ms). INT8 trades recall for precision (FN 11→50, FP 45→29).
+FP32↔INT8 parity is reported, not gated: dummy max 1.5e-2 / mean 9.3e-4, real
+max 0.92 / mean 2.6e-2; the worst-case output error does not translate into a
+large aggregate task-metric shift. Reports: `outputs/onnx/quantization_report.json`,
+`outputs/stage2_int8_eval/int8_eval.json`.
+
 ---
 
 ## 4. Known caveats
@@ -150,9 +180,10 @@ max abs err 7.451e-07 / mean 3.308e-08. Report: `outputs/onnx/stage2_distill_par
 
 1. **ONNX export** — ✅ done (`outputs/onnx/stage2_distill.onnx`, opset 17).
 2. **Parity check** — ✅ done (max abs err 1.1e-7 dummy / 7.5e-7 real, tol 1e-4 PASS).
-3. **INT8 static quantization** — ⬜ TODO. ONNX Runtime static quant using ~500
-   validation traces for calibration; report detection-F1 and pick-MAE delta
-   pre/post. If picks degrade, keep the head in FP32 and quantize only the body.
+3. **INT8 static quantization** — ✅ done (`outputs/onnx/stage2_distill_int8.onnx`,
+   0.104 MB, 1.95× smaller). Static QDQ, 500 val calibration traces; full-test F1
+   0.9944 → 0.9920 (no meaningful loss). Head-FP32 fallback tried and found
+   equivalent, so full INT8 shipped. `scripts/quantize_onnx.py`.
 4. **Latency benchmark** — ⬜ TODO. ms per 60 s window, single CPU thread, p50/p95
    over 200 runs; dependency-light so it re-runs on Raspberry Pi / ARM Graviton.
 5. **Streaming wrapper** — ⬜ TODO. Consume a continuous stream in overlapping
