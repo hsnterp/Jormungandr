@@ -100,7 +100,8 @@ seismic-edge-picker/
 ├── scripts/
 │   ├── inspect_model.py        # Phase 2 verification (param count + MFLOPs)
 │   ├── sanity_check_data.py    # Phase 1 verification (plot traces + labels)
-│   └── train.py                # Stage-1 training + tiny smoke mode
+│   ├── train.py                # Stage-1 training + tiny smoke mode
+│   └── evaluate.py             # Phase 4: F1 + pick residuals on a split
 ├── tests/                      # pytest sanity tests (run without the dataset)
 ├── notes/PROGRESS.md           # phase-by-phase status + handoff notes
 └── configs / data / checkpoints / outputs
@@ -133,6 +134,10 @@ python scripts/train.py --config configs/default.yaml --smoke-test
 
 # Full Stage 1 (50 epochs configured; requires explicit approval before launch)
 python scripts/train.py --config configs/default.yaml
+
+# Phase 4 — evaluate a checkpoint on the test split
+python scripts/evaluate.py --config configs/default.yaml \
+    --checkpoint checkpoints/stage1/best.pt --out outputs/stage1_eval
 ```
 
 ## Roadmap / status
@@ -141,8 +146,8 @@ python scripts/train.py --config configs/default.yaml
 |---|---|---|
 | 1 | data pipeline (preprocess, labels, augment, grouped split, sanity plot) | ✅ complete & verified on STEAD |
 | 2 | 1D U-Net (<300k params, quant-friendly) | ✅ complete & verified |
-| 3 | training (supervised BCE → EQT distillation) | overfit + Stage-1 smoke passed; full run pending |
-| 4 | evaluation (F1, pick MAE/std in ms, SNR buckets, EQT comparison) | not started |
+| 3 | training (supervised BCE → EQT distillation) | Stage 1 complete (50 epochs); Stage 2 distillation not started |
+| 4 | evaluation (F1, pick MAE/std in ms, SNR buckets, EQT comparison) | student evaluated on test split; EQT side-by-side pending |
 | 5 | deployment (ONNX, INT8, latency bench, streaming) | not started |
 
 See [`notes/PROGRESS.md`](notes/PROGRESS.md) for detailed status and the
@@ -150,5 +155,27 @@ continuation plan.
 
 ## Results
 
-_Populated in Phase 4 — side-by-side vs pretrained EQTransformer (F1, pick MAE,
-param count) will be written to `outputs/comparison.md` and inlined here._
+### Stage 1 (supervised, 50 epochs) — test split
+
+Best checkpoint `checkpoints/stage1/best.pt` (epoch 48, val weighted BCE
+**0.01794**), evaluated on the held-out test split (7,781 traces: 4,957
+earthquake / 2,824 noise) with `scripts/evaluate.py` (detection threshold 0.5,
+pick-peak height 0.3, match tolerance ±500 ms):
+
+| metric | value |
+|---|---|
+| test weighted BCE | **0.01770** |
+| detection precision / recall / **F1** | 0.9227 / 0.9998 / **0.9597** |
+| P pick MAE / std (within ±500 ms; hit rate 97.6%) | **46.0 ms** / 77.4 ms |
+| S pick MAE / std (within ±500 ms; hit rate 96.4%) | **72.4 ms** / 112.3 ms |
+| parameters | 48,051 |
+
+Precision is limited by false alarms on noise traces (415 / 2,824 = 14.7%
+noise false-alarm rate); recall is near-perfect (1 missed event). Pick MAE
+degrades gracefully with SNR (P: 42 ms at >20 dB → 66 ms at 0–10 dB). Full
+metrics, SNR-bucket breakdown, and residual histograms live in
+`outputs/stage1_eval/` (`test_metrics.json`, `snr_breakdown.csv`,
+`pick_residuals.png`, `summary.txt`).
+
+_Side-by-side vs pretrained EQTransformer (F1, pick MAE, param count) comes
+with Phase 4 completion and will be inlined here._
