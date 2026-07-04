@@ -18,7 +18,7 @@ architecture as Stage 1 — distillation only changed the weights.
 | 2 | 1D U-Net (48,051 params, 38.1 MFLOPs, INT8-friendly ops) | ✅ complete & verified |
 | 3 | training — Stage 1 supervised + Stage 2 distillation | ✅ complete |
 | 4 | evaluation — F1 / pick MAE / SNR buckets / EQT baseline / threshold tuning | ✅ complete |
-| 5 | deployment — ONNX → INT8 → latency → streaming | 🟡 ONNX + INT8 + latency benchmark done; streaming pending |
+| 5 | deployment — ONNX → INT8 → latency → streaming | ✅ complete |
 
 **Headline test-split numbers** (7,781 traces: 4,957 eq / 2,824 noise; identical
 split + tolerances across all rows):
@@ -165,6 +165,28 @@ INT8 ONNX mean latency is **1.27× faster than FP32 ONNX** and **2.73× faster
 than PyTorch** on this host. Reports: `outputs/latency/latency_report.json` and
 `outputs/latency/latency_report.md`. CUDA was not benchmarked; deployment is CPU-only.
 
+**Streaming inference** (Phase 5d, done):
+```bash
+python scripts/stream_infer.py --demo-traces 4 --plot --save-probabilities \
+    --out-dir outputs/streaming_demo
+```
+Reusable core: `src/seismic_edge_picker/streaming.py`. INT8 ONNX defaults to
+60 s windows / 30 s hop / one CPU thread; the padded tail is trimmed and overlap
+probabilities are uniformly averaged. Events use threshold 0.80 + 10 ms, with
+qualifying fragments up to 0.5 s apart coalesced. P/S peaks use 0.30 and are
+emitted when associated with an event (1 s margin).
+
+Smoke demo: four interleaved test traces (240 s; two earthquake / two noise),
+seven windows → **2 events, 2 P picks, 1 S pick**. Outputs:
+`events.csv`, `picks.csv`, `summary.{json,txt}`, optional
+`merged_probabilities.npz`, and `streaming_predictions.png` under
+`outputs/streaming_demo/`. Timestamps are relative to input start. This verifies
+the path; it is not a new accuracy evaluation.
+
+**INT8 low-false-alarm limitation:** 0.90 + 500 ms was selected on FP32 trace-level
+outputs. It remains configurable, but has not been retuned or validated on merged
+INT8 streaming output; the streaming default remains the evaluated 0.80 point.
+
 ---
 
 ## 4. Known caveats
@@ -196,10 +218,13 @@ than PyTorch** on this host. Reports: `outputs/latency/latency_report.json` and
   `export_onnx.py` uses the legacy exporter (`dynamo=False`) to stay dependency-light.
 - **Latency is hardware-specific.** Current numbers are from an AMD EPYC 7763
   host with one thread; rerun `benchmark_latency.py` on Raspberry Pi / Graviton.
+- **The streaming demo is a path smoke test.** Concatenated, independently
+  preprocessed traces have artificial boundaries and do not measure continuous-
+  stream detection quality. Low-false-alarm INT8 streaming remains uncalibrated.
 
 ---
 
-## 5. Next Phase 5 tasks (deployment)
+## 5. Phase 5 deployment checklist
 
 1. **ONNX export** — ✅ done (`outputs/onnx/stage2_distill.onnx`, opset 17).
 2. **Parity check** — ✅ done (max abs err 1.1e-7 dummy / 7.5e-7 real, tol 1e-4 PASS).
@@ -210,10 +235,10 @@ than PyTorch** on this host. Reports: `outputs/latency/latency_report.json` and
 4. **Latency benchmark** — ✅ done (`scripts/benchmark_latency.py`). One thread,
    20 warmups + 200 runs on AMD EPYC 7763; INT8 ONNX p50/p95/mean =
    1.226/1.253/1.233 ms (811.0 windows/s). Rerun on Raspberry Pi / Graviton.
-5. **Streaming wrapper** — ⬜ TODO. Consume a continuous stream in overlapping
-   60 s / 30 s-hop windows, merge predictions, emit pick timestamps; demo script
-   over a long concatenated test signal. Bake in a recommended operating point
-   from §2 (max-F1 thr 0.80, or low-false-alarm thr 0.90 + 500 ms).
+5. **Streaming wrapper** — ✅ done (`src/seismic_edge_picker/streaming.py`,
+   `scripts/stream_infer.py`). 60 s / 30 s hop, overlap mean, relative event/P/S
+   timestamps, CSV/JSON/text/plot outputs, four-trace demo, and synthetic tests.
+   Default: 0.80 + 10 ms; INT8 low-false-alarm streaming is not yet calibrated.
 
 ---
 
@@ -225,4 +250,4 @@ than PyTorch** on this host. Reports: `outputs/latency/latency_report.json` and
 - STEAD at `~/.seisbench/datasets/stead/` (`metadata.csv` 402.6 MB +
   `waveforms.hdf5` 91.1 GB). Grouped split (subset 50k eq + 25k noise): train
   **59,116** / val **8,103** / test **7,781**, disjoint by event/station.
-- `pytest -q` → **39 passed** (pure-logic tests; no dataset/network needed).
+- `pytest -q` → **45 passed** (pure-logic tests; no dataset/network needed).

@@ -1,0 +1,252 @@
+{
+  "checkpoint": "checkpoints/stage2_distill/best.pt",
+  "fp32_onnx": "outputs/onnx/stage2_distill.onnx",
+  "int8_onnx": "outputs/onnx/stage2_distill_int8.onnx",
+  "shipped_variant": "full",
+  "quantization": {
+    "mode": "static",
+    "quant_format": "QDQ",
+    "weight_type": "QInt8",
+    "activation_type": "QUInt8",
+    "per_channel": true,
+    "calibrate_method": "MinMax",
+    "calibration_traces": 500,
+    "calibration_split": "val",
+    "head_node": "/head/Conv",
+    "note": null,
+    "onnxruntime_version": "1.27.0"
+  },
+  "size": {
+    "fp32_mb": 0.203518,
+    "int8_mb": 0.104213,
+    "reduction_x": 1.9529041482348652,
+    "reduction_pct": 48.7942098487603,
+    "variants_mb": {
+      "full": 0.104213,
+      "head_fp32": 0.103822
+    }
+  },
+  "parity": {
+    "dummy": {
+      "input_shape": [
+        1,
+        3,
+        6000
+      ],
+      "pytorch_vs_fp32_onnx": {
+        "output_shape": [
+          1,
+          3,
+          6000
+        ],
+        "shapes_match": true,
+        "max_abs_err": 1.1066731531172991e-07,
+        "mean_abs_err": 2.4071685089666062e-08
+      },
+      "fp32_onnx_vs_int8_full": {
+        "output_shape": [
+          1,
+          3,
+          6000
+        ],
+        "shapes_match": true,
+        "max_abs_err": 0.014718908816576004,
+        "mean_abs_err": 0.0009295315248891711
+      },
+      "fp32_onnx_vs_int8_head_fp32": {
+        "output_shape": [
+          1,
+          3,
+          6000
+        ],
+        "shapes_match": true,
+        "max_abs_err": 0.014718908816576004,
+        "mean_abs_err": 0.0009391126804985106
+      }
+    },
+    "real_test_batch": {
+      "input_shape": [
+        8,
+        3,
+        6000
+      ],
+      "pytorch_vs_fp32_onnx": {
+        "output_shape": [
+          8,
+          3,
+          6000
+        ],
+        "shapes_match": true,
+        "max_abs_err": 7.450580596923828e-07,
+        "mean_abs_err": 3.308466389739806e-08
+      },
+      "fp32_onnx_vs_int8_full": {
+        "output_shape": [
+          8,
+          3,
+          6000
+        ],
+        "shapes_match": true,
+        "max_abs_err": 0.9237973690032959,
+        "mean_abs_err": 0.025899959728121758
+      },
+      "fp32_onnx_vs_int8_head_fp32": {
+        "output_shape": [
+          8,
+          3,
+          6000
+        ],
+        "shapes_match": true,
+        "max_abs_err": 0.9237973690032959,
+        "mean_abs_err": 0.02580898627638817
+      }
+    }
+  },
+  "evaluation": {
+    "split": "test",
+    "n_evaluated": 7781,
+    "threshold": 0.8,
+    "eval_params": {
+      "peak_height": 0.3,
+      "peak_min_distance_s": 1.0,
+      "match_tolerance_s": 0.5
+    },
+    "fp32_onnx": {
+      "threshold": 0.8,
+      "n_traces": 7781,
+      "n_earthquake": 4957,
+      "n_noise": 2824,
+      "detection": {
+        "tp": 4946,
+        "fp": 45,
+        "fn": 11,
+        "tn": 2779,
+        "precision": 0.9909837707874174,
+        "recall": 0.9977809158765383,
+        "f1": 0.9943707277844793
+      },
+      "p_picks": {
+        "n_ground_truth": 4957,
+        "n_picked": 4911,
+        "n_within_tolerance": 4862,
+        "residuals_within_tol": {
+          "n": 4862,
+          "mae_ms": 36.95415199506377,
+          "std_ms": 56.31953619680889,
+          "mean_ms": -15.166629576306057
+        }
+      },
+      "s_picks": {
+        "n_ground_truth": 4957,
+        "n_picked": 4883,
+        "n_within_tolerance": 4762,
+        "residuals_within_tol": {
+          "n": 4762,
+          "mae_ms": 71.43534040319194,
+          "std_ms": 109.42569149019273,
+          "mean_ms": -7.143654556908877
+        }
+      }
+    },
+    "fp32_infer_seconds": 7.282247647643089,
+    "int8_variants": {
+      "full": {
+        "exclude": [],
+        "eval": {
+          "threshold": 0.8,
+          "n_traces": 7781,
+          "n_earthquake": 4957,
+          "n_noise": 2824,
+          "detection": {
+            "tp": 4907,
+            "fp": 29,
+            "fn": 50,
+            "tn": 2795,
+            "precision": 0.9941247974068071,
+            "recall": 0.9899132539842647,
+            "f1": 0.9920145557464874
+          },
+          "p_picks": {
+            "n_ground_truth": 4957,
+            "n_picked": 4881,
+            "n_within_tolerance": 4788,
+            "residuals_within_tol": {
+              "n": 4788,
+              "mae_ms": 45.62723893065999,
+              "std_ms": 68.9691745192931,
+              "mean_ms": -19.840661236424406
+            }
+          },
+          "s_picks": {
+            "n_ground_truth": 4957,
+            "n_picked": 4826,
+            "n_within_tolerance": 4706,
+            "residuals_within_tol": {
+              "n": 4706,
+              "mae_ms": 76.24009371015725,
+              "std_ms": 113.30934898464508,
+              "mean_ms": -11.074329154271156
+            }
+          }
+        },
+        "infer_seconds": 10.625998297706246,
+        "size_mb": 0.104213
+      },
+      "head_fp32": {
+        "exclude": [
+          "/head/Conv"
+        ],
+        "eval": {
+          "threshold": 0.8,
+          "n_traces": 7781,
+          "n_earthquake": 4957,
+          "n_noise": 2824,
+          "detection": {
+            "tp": 4907,
+            "fp": 29,
+            "fn": 50,
+            "tn": 2795,
+            "precision": 0.9941247974068071,
+            "recall": 0.9899132539842647,
+            "f1": 0.9920145557464874
+          },
+          "p_picks": {
+            "n_ground_truth": 4957,
+            "n_picked": 4880,
+            "n_within_tolerance": 4788,
+            "residuals_within_tol": {
+              "n": 4788,
+              "mae_ms": 45.71746449456976,
+              "std_ms": 68.77120130948057,
+              "mean_ms": -19.656868421052643
+            }
+          },
+          "s_picks": {
+            "n_ground_truth": 4957,
+            "n_picked": 4822,
+            "n_within_tolerance": 4704,
+            "residuals_within_tol": {
+              "n": 4704,
+              "mae_ms": 76.2433943452381,
+              "std_ms": 113.73655898343951,
+              "mean_ms": -10.973170280612258
+            }
+          }
+        },
+        "infer_seconds": 11.385119988583028,
+        "size_mb": 0.103822
+      }
+    }
+  },
+  "verdict": {
+    "chosen_variant": "full",
+    "f1_fp32": 0.9943707277844793,
+    "f1_int8": 0.9920145557464874,
+    "f1_drop_fp32_to_int8": 0.002356172037991877,
+    "p_mae_delta_ms": 8.673086935596224,
+    "s_mae_delta_ms": 4.80475330696531,
+    "detection_meaningfully_hurt": false,
+    "picks_meaningfully_hurt": false,
+    "criteria": "detection hurt if F1 drop > 0.005; picks hurt if P or S MAE increase > 10 ms"
+  }
+}

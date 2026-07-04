@@ -176,3 +176,11 @@ deploy:
   streaming:
     window_s: 60
     hop_s: 30
+    detection_threshold: 0.80
+    min_duration_ms: 10
+    event_merge_gap_s: 0.5
+    p_threshold: 0.30
+    s_threshold: 0.30
+    peak_min_distance_s: 1.0
+    association_margin_s: 1.0
+    threads: 1

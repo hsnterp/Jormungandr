@@ -1,0 +1,134 @@
+{
+  "model": "outputs/onnx/stage2_distill_int8.onnx",
+  "backend": "ONNX Runtime CPUExecutionProvider",
+  "onnxruntime_version": "1.27.0",
+  "input": "4 concatenated test traces",
+  "input_preprocessed": true,
+  "sampling_rate_hz": 100.0,
+  "signal_samples": 24000,
+  "signal_duration_s": 240.0,
+  "window_s": 60.0,
+  "hop_s": 30.0,
+  "window_samples": 6000,
+  "hop_samples": 3000,
+  "window_starts": [
+    0,
+    3000,
+    6000,
+    9000,
+    12000,
+    15000,
+    18000
+  ],
+  "n_windows": 7,
+  "merge": "uniform mean over overlapping window probabilities",
+  "threads": 1,
+  "batch_size": 1,
+  "inference_wall_seconds": 0.009757705964148045,
+  "operating_point": {
+    "detection_threshold": 0.8,
+    "min_duration_ms": 10.0,
+    "event_merge_gap_s": 0.5,
+    "p_threshold": 0.3,
+    "s_threshold": 0.3,
+    "peak_min_distance_s": 1.0,
+    "association_margin_s": 1.0
+  },
+  "counts": {
+    "events": 2,
+    "p_picks": 2,
+    "s_picks": 1,
+    "associated_picks": 3,
+    "unassociated_candidates_filtered": 1
+  },
+  "events": [
+    {
+      "event_id": 1,
+      "start_sample": 884,
+      "end_sample_exclusive": 940,
+      "start_time_s": 8.84,
+      "end_time_s": 9.4,
+      "duration_s": 0.56,
+      "peak_sample": 890,
+      "peak_time_s": 8.9,
+      "peak_probability": 0.9015059471130371
+    },
+    {
+      "event_id": 2,
+      "start_sample": 12602,
+      "end_sample_exclusive": 13688,
+      "start_time_s": 126.02,
+      "end_time_s": 136.88,
+      "duration_s": 10.86,
+      "peak_sample": 13056,
+      "peak_time_s": 130.56,
+      "peak_probability": 0.9955761432647705
+    }
+  ],
+  "picks": [
+    {
+      "phase": "P",
+      "sample": 800,
+      "time_s": 8.0,
+      "probability": 0.4821097254753113,
+      "event_id": 1
+    },
+    {
+      "phase": "P",
+      "sample": 12590,
+      "time_s": 125.9,
+      "probability": 0.828993558883667,
+      "event_id": 2
+    },
+    {
+      "phase": "S",
+      "sample": 13067,
+      "time_s": 130.67,
+      "probability": 0.9093451499938965,
+      "event_id": 2
+    }
+  ],
+  "sources": [
+    {
+      "segment": 0,
+      "dataset_index": 0,
+      "metadata_row": 998953,
+      "category": "earthquake_local",
+      "start_time_s": 0.0,
+      "end_time_s": 60.0,
+      "ground_truth_p_time_s": 8.0,
+      "ground_truth_s_time_s": 32.33
+    },
+    {
+      "segment": 1,
+      "dataset_index": 1,
+      "metadata_row": 146843,
+      "category": "noise",
+      "start_time_s": 60.0,
+      "end_time_s": 120.0,
+      "ground_truth_p_time_s": null,
+      "ground_truth_s_time_s": null
+    },
+    {
+      "segment": 2,
+      "dataset_index": 2,
+      "metadata_row": 597658,
+      "category": "earthquake_local",
+      "start_time_s": 120.0,
+      "end_time_s": 180.0,
+      "ground_truth_p_time_s": 126.022,
+      "ground_truth_s_time_s": 130.52200000000002
+    },
+    {
+      "segment": 3,
+      "dataset_index": 4,
+      "metadata_row": 124360,
+      "category": "noise",
+      "start_time_s": 180.0,
+      "end_time_s": 240.0,
+      "ground_truth_p_time_s": null,
+      "ground_truth_s_time_s": null
+    }
+  ],
+  "operating_point_note": "0.80 + 10 ms is the Stage 2 FP32 max-F1 point and was evaluated for INT8 at threshold 0.80. A separate low-false-alarm INT8 streaming threshold has not been calibrated."
+}

@@ -96,7 +96,8 @@ seismic-edge-picker/
 │   ├── splits.py               # grouped, leakage-free train/val/test split
 │   ├── dataset.py              # cached-only SeisBench/STEAD torch Dataset
 │   ├── losses.py               # weighted per-stream BCE
-│   └── model.py                # 1D U-Net + param/FLOP counters
+│   ├── model.py                # 1D U-Net + param/FLOP counters
+│   └── streaming.py            # overlap merge + event/P/S postprocessing
 ├── scripts/
 │   ├── inspect_model.py        # Phase 2 verification (param count + MFLOPs)
 │   ├── sanity_check_data.py    # Phase 1 verification (plot traces + labels)
@@ -109,7 +110,8 @@ seismic-edge-picker/
 │   ├── distill_smoke.py        # Stage 2: tiny end-to-end cache + 1-epoch smoke
 │   ├── export_onnx.py          # Phase 5: ONNX export + ORT parity check
 │   ├── quantize_onnx.py        # Phase 5b: INT8 static quantization + parity/eval
-│   └── benchmark_latency.py    # Phase 5c: CPU latency + throughput report
+│   ├── benchmark_latency.py    # Phase 5c: CPU latency + throughput report
+│   └── stream_infer.py         # Phase 5d: continuous INT8 ONNX inference demo
 ├── src/seismic_edge_picker/distill.py  # Stage 2 loss + cache + teacher loading
 ├── docs/stage2.md              # Stage 2 pipeline, loss, cache format, commands
 ├── tests/                      # pytest sanity tests (run without the dataset)
@@ -170,7 +172,7 @@ python scripts/threshold_sweep.py --config configs/default.yaml \
 | 2 | 1D U-Net (<300k params, quant-friendly) | ✅ complete & verified |
 | 3 | training (supervised BCE → EQT distillation) | ✅ Stage 1 (50 epochs) **and** Stage 2 distillation complete |
 | 4 | evaluation (F1, pick MAE/std in ms, SNR buckets, EQT comparison) | ✅ distilled student evaluated + threshold-tuned; EQT side-by-side done |
-| 5 | deployment (ONNX, INT8, latency bench, streaming) | 🟡 **ONNX + INT8 + latency benchmarking done**; streaming next |
+| 5 | deployment (ONNX, INT8, latency bench, streaming) | ✅ **complete** |
 
 See [`docs/PROGRESS.md`](docs/PROGRESS.md) for detailed status and the
 continuation plan.
@@ -394,13 +396,43 @@ on Raspberry Pi or Graviton targets. Reports:
 `outputs/latency/latency_report.json` and `outputs/latency/latency_report.md`.
 CUDA was not benchmarked because Phase 5 targets CPU deployment.
 
-### Remaining Phase 5 step (not started)
+### ✅ Streaming inference wrapper (done)
 
-1. **Streaming wrapper** — consume a continuous stream in overlapping 60 s / 30 s-hop
-   windows, merge predictions, emit pick timestamps; demo over a long concatenated
-   test signal.
+`src/seismic_edge_picker/streaming.py` provides fixed-hop window generation,
+zero-padded tail handling, uniform overlap averaging, contiguous event extraction,
+short-gap coalescing, P/S peak extraction, and event association. The CLI uses
+the INT8 ONNX model and one ORT CPU thread by default:
 
-The tuned operating points above are the recommended defaults to bake into the
-streaming wrapper (max-F1 thr 0.80, or low-false-alarm thr 0.90 + 500 ms). The
-model uses only INT8-friendly ops (`Conv1d` / `BatchNorm1d` / `ReLU` /
-NN-upsample).
+```bash
+python scripts/stream_infer.py --demo-traces 4 --plot --save-probabilities \
+    --out-dir outputs/streaming_demo
+```
+
+The smoke demo concatenated four test traces (two earthquake, two noise) into a
+240 s signal. Seven 60 s windows at a 30 s hop produced **2 coalesced events,
+2 P picks, and 1 S pick**. This verifies the streaming path; it is not a new
+accuracy evaluation. Outputs:
+
+- `events.csv` and `picks.csv` — relative timestamps and probabilities;
+- `summary.json` / `summary.txt` — settings, source traces, counts, and records;
+- `merged_probabilities.npz` — optional merged streams and overlap coverage;
+- `streaming_predictions.png` — optional waveform/probability visualization.
+
+For a continuous raw float32 array shaped `(3,N)` or `(N,3)` at 100 Hz:
+
+```bash
+python scripts/stream_infer.py --input continuous.npy \
+    --out-dir outputs/streaming_demo
+```
+
+Raw arrays are demeaned, bandpassed, and normalized per 60 s model window;
+`--input-preprocessed` skips that step. Output times are seconds relative to the
+array start. The default detection point is threshold **0.80**, minimum duration
+**10 ms**, with qualifying fragments separated by at most 0.5 s coalesced into
+one event. P/S peaks default to 0.30 and are event-gated; use
+`--emit-unassociated-picks` to retain all candidates.
+
+The FP32 **0.90 + 500 ms** low-false-alarm point has not been separately retuned
+for merged INT8 streaming output, so it is documented as an override—not claimed
+as a validated INT8 streaming operating point. The model uses only INT8-friendly
+ops (`Conv1d` / `BatchNorm1d` / `ReLU` / NN-upsample).
