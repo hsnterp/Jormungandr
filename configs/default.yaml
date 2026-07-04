@@ -1,4 +1,4 @@
-# seismic-edge-picker — default configuration
+# Jormungandr — default configuration
 # All phases read from this file. Values here are the reproducible defaults.
 
 seed: 42

@@ -1,4 +1,4 @@
-"""seismic-edge-picker: compact, edge-deployable seismic event detector and
+"""Jormungandr: compact, edge-deployable seismic event detector and
 phase picker (STEAD-trained, EQTransformer-distilled, INT8-ready).
 
 Public API surface used across phases. Heavy / data-dependent modules

@@ -1,25 +1,40 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "seismic-edge-picker"
+name = "jormungandr"
 version = "0.1.0"
-description = "Compact, edge-deployable seismic event detector and phase picker (STEAD, distilled from EQTransformer, INT8-ready)."
-requires-python = ">=3.10"
+description = "Compact, edge-deployable seismic event detector and phase picker."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
+authors = [{name = "hsnterp"}]
+keywords = ["seismology", "phase-picking", "edge-ai", "onnx", "int8"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
-    "torch",
-    "seisbench",
-    "numpy",
-    "scipy",
-    "matplotlib",
-    "pyyaml",
-    "onnx",
-    "onnxruntime",
+    "torch>=2.12,<2.13",
+    "seisbench>=0.11.7,<0.12",
+    "numpy>=2.5,<2.6",
+    "scipy>=1.18,<1.19",
+    "matplotlib>=3.11,<3.12",
+    "pyyaml>=6.0,<7",
+    "onnx>=1.22,<1.23",
+    "onnxruntime>=1.27,<1.28",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest>=9.1,<9.2"]
+
+[project.urls]
+Repository = "https://github.com/hsnterp/Jormungandr"
+Issues = "https://github.com/hsnterp/Jormungandr/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

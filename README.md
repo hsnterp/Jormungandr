@@ -1,4 +1,4 @@
-# seismic-edge-picker
+# Jormungandr
 
 A compact, **edge-deployable seismic event detector and phase picker**. It
 takes a 60-second, 3-channel, 100 Hz waveform and outputs three per-sample
@@ -7,7 +7,8 @@ probability streams — **event detection**, **P-arrival**, **S-arrival** — fr
 
 The model is trained on [STEAD](https://github.com/smousavi05/STEAD) via
 [SeisBench](https://github.com/seisbench/seisbench) and distilled from a
-pretrained **EQTransformer** teacher.
+pretrained **EQTransformer** teacher. The repository and distribution are named
+**Jormungandr**; the stable Python import package remains `seismic_edge_picker`.
 
 ## Motivation
 
@@ -86,7 +87,7 @@ output (3, 6000)
 ## Repository layout
 
 ```
-seismic-edge-picker/
+Jormungandr/
 ├── configs/default.yaml        # single source of truth for all phases
 ├── src/seismic_edge_picker/
 │   ├── config.py               # YAML → attribute namespace
@@ -122,11 +123,26 @@ seismic-edge-picker/
 ## Setup
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
+python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+pip install -e . --no-deps
 ```
 
-Training uses a GPU; **all inference/deployment code is CPU-only**.
+`requirements.txt` pins the exact Python 3.12 environment used for the published
+verification. Training uses a GPU; **all inference/deployment code is CPU-only**.
+
+## Published model artifacts
+
+The repository ships the directly usable FP32 and INT8 ONNX deployment models:
+
+- `outputs/onnx/stage2_distill.onnx`
+- `outputs/onnx/stage2_distill_int8.onnx` (default deployment artifact)
+
+STEAD data and PyTorch checkpoints are intentionally excluded. Commands that
+reference `checkpoints/stage2_distill/best.pt` require reproducing Stage 1/Stage 2
+training first. ONNX benchmarking and streaming work directly from the included
+artifacts without a checkpoint. See [`MODEL_CARD.md`](MODEL_CARD.md) for intended
+use, evaluation, and limitations.
 
 ## Reproduction
 
@@ -144,7 +160,7 @@ python scripts/sanity_check_data.py --config configs/default.yaml \
 # Stage 1 smoke test (16 train + 8 val traces, one epoch)
 python scripts/train.py --config configs/default.yaml --smoke-test
 
-# Full Stage 1 (50 epochs configured; requires explicit approval before launch)
+# Full Stage 1 (50 epochs configured; expensive GPU run)
 python scripts/train.py --config configs/default.yaml
 
 # Phase 4 — evaluate a checkpoint on the test split
@@ -179,8 +195,10 @@ continuation plan.
 
 ## Results
 
-**Headline model: the Stage 2 EQTransformer-distilled student**
-(`checkpoints/stage2_distill/best.pt`). Everything below is evaluated on the
+**Headline model: the Stage 2 EQTransformer-distilled student.** The training
+checkpoint is reproduced at `checkpoints/stage2_distill/best.pt`; the included
+public deployment artifact is `outputs/onnx/stage2_distill_int8.onnx`. Everything
+below is evaluated on the
 **identical** held-out test split (7,781 traces: 4,957 earthquake / 2,824 noise)
 with the **identical** detection/pick tolerances (peak height 0.3, match
 tolerance ±500 ms), so every row is directly comparable.
@@ -436,3 +454,22 @@ The FP32 **0.90 + 500 ms** low-false-alarm point has not been separately retuned
 for merged INT8 streaming output, so it is documented as an override—not claimed
 as a validated INT8 streaming operating point. The model uses only INT8-friendly
 ops (`Conv1d` / `BatchNorm1d` / `ReLU` / NN-upsample).
+
+
+## Citation and licensing
+
+Jormungandr is released under the [GNU GPL v3](LICENSE). The shipped model was
+trained on STEAD and distilled from EQTransformer through SeisBench. If you use
+this project, cite Jormungandr via [`CITATION.cff`](CITATION.cff) and cite the
+underlying work:
+
+- Mousavi et al. (2019), **STEAD**, DOI
+  [`10.1109/ACCESS.2019.2947848`](https://doi.org/10.1109/ACCESS.2019.2947848)
+  — dataset licensed CC BY 4.0.
+- Mousavi et al. (2020), **EQTransformer**, DOI
+  [`10.1038/s41467-020-17591-w`](https://doi.org/10.1038/s41467-020-17591-w).
+- Woollam et al. (2022), **SeisBench**, DOI
+  [`10.1785/0220210324`](https://doi.org/10.1785/0220210324).
+
+See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for complete attribution,
+license links, and modification notices.

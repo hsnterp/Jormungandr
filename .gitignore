@@ -1,20 +1,53 @@
-# data / model artifacts
+# Local credentials and machine-specific agent settings
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+.claude/
+
+# Data and local model artifacts
 data/
 !data/.gitkeep
 checkpoints/
-outputs/
 *.onnx
 *.pt
 *.pth
 *.ckpt
+*.log
 
-# python
+# Shipped deployment artifacts (explicit exceptions)
+outputs/*
+!outputs/onnx/
+outputs/onnx/*
+!outputs/onnx/stage2_distill.onnx
+!outputs/onnx/stage2_distill_int8.onnx
+!outputs/onnx/stage2_distill_parity.json
+!outputs/onnx/quantization_report.json
+!outputs/latency/
+outputs/latency/*
+!outputs/latency/latency_report.json
+!outputs/latency/latency_report.md
+!outputs/streaming_demo/
+outputs/streaming_demo/*
+!outputs/streaming_demo/events.csv
+!outputs/streaming_demo/picks.csv
+!outputs/streaming_demo/summary.json
+!outputs/streaming_demo/summary.txt
+!outputs/streaming_demo/merged_probabilities.npz
+!outputs/streaming_demo/streaming_predictions.png
+
+# Python
 __pycache__/
 *.py[cod]
 .venv/
 *.egg-info/
 .pytest_cache/
 .ipynb_checkpoints/
+build/
+dist/
 
-# os
+# OS
 .DS_Store

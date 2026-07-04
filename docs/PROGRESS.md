@@ -1,12 +1,14 @@
-# PROGRESS — seismic-edge-picker (compacted)
+# PROGRESS — Jormungandr
 
-Source-of-truth status + handoff for continuing the build. Companion to
-`HANDOFF.md` (narrative) and `docs/stage2.md` (distillation detail).
+Detailed experiment status and reproduction notes. See `docs/stage2.md` for the
+distillation pipeline and `MODEL_CARD.md` for public model documentation.
 **Last updated: 2026-07-04.**
 
-Headline model: **`checkpoints/stage2_distill/best.pt`** (Stage 2 EQTransformer-
-distilled student; epoch 20, val weighted BCE 0.017934). Same 48,051-param
-architecture as Stage 1 — distillation only changed the weights.
+Headline model: Stage 2 EQTransformer-distilled student (epoch 20, val weighted
+BCE 0.017934). The reproducible training checkpoint path is
+`checkpoints/stage2_distill/best.pt`; the repository ships FP32/INT8 ONNX
+artifacts instead of PyTorch checkpoints. Same 48,051-param architecture as
+Stage 1 — distillation only changed the weights.
 
 ---
 

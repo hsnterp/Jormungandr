@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If you use Jormungandr, cite this software and the works in THIRD_PARTY_NOTICES.md."
+title: "Jormungandr"
+type: software
+authors:
+  - family-names: "hsnterp"
+version: 0.1.0
+date-released: 2026-07-04
+repository-code: "https://github.com/hsnterp/Jormungandr"
+license: GPL-3.0-only
+keywords:
+  - seismology
+  - phase picking
+  - edge AI
+  - ONNX
