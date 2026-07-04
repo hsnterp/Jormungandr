@@ -108,7 +108,8 @@ seismic-edge-picker/
 │   ├── train_distill.py        # Stage 2b: distillation fine-tune (hard+soft blend)
 │   ├── distill_smoke.py        # Stage 2: tiny end-to-end cache + 1-epoch smoke
 │   ├── export_onnx.py          # Phase 5: ONNX export + ORT parity check
-│   └── quantize_onnx.py        # Phase 5b: INT8 static quantization + parity/eval
+│   ├── quantize_onnx.py        # Phase 5b: INT8 static quantization + parity/eval
+│   └── benchmark_latency.py    # Phase 5c: CPU latency + throughput report
 ├── src/seismic_edge_picker/distill.py  # Stage 2 loss + cache + teacher loading
 ├── docs/stage2.md              # Stage 2 pipeline, loss, cache format, commands
 ├── tests/                      # pytest sanity tests (run without the dataset)
@@ -169,7 +170,7 @@ python scripts/threshold_sweep.py --config configs/default.yaml \
 | 2 | 1D U-Net (<300k params, quant-friendly) | ✅ complete & verified |
 | 3 | training (supervised BCE → EQT distillation) | ✅ Stage 1 (50 epochs) **and** Stage 2 distillation complete |
 | 4 | evaluation (F1, pick MAE/std in ms, SNR buckets, EQT comparison) | ✅ distilled student evaluated + threshold-tuned; EQT side-by-side done |
-| 5 | deployment (ONNX, INT8, latency bench, streaming) | 🟡 **ONNX export + parity + INT8 quantization done**; latency / streaming next |
+| 5 | deployment (ONNX, INT8, latency bench, streaming) | 🟡 **ONNX + INT8 + latency benchmarking done**; streaming next |
 
 See [`docs/PROGRESS.md`](docs/PROGRESS.md) for detailed status and the
 continuation plan.
@@ -368,11 +369,34 @@ P-pick MAE rises 8.7 ms, and S-pick MAE rises 4.8 ms. Reports are saved to
 `outputs/onnx/quantization_report.json` and
 `outputs/stage2_int8_eval/int8_eval.json`.
 
-### Remaining Phase 5 steps (not started)
+### ✅ CPU latency benchmark (done)
 
-1. **Latency benchmark** — ms per 60 s window, single CPU thread, p50/p95 over 200
-   runs; dependency-light so it can be re-run on a Raspberry Pi / ARM Graviton.
-2. **Streaming wrapper** — consume a continuous stream in overlapping 60 s / 30 s-hop
+```bash
+python scripts/benchmark_latency.py --config configs/default.yaml \
+    --checkpoint checkpoints/stage2_distill/best.pt \
+    --fp32-onnx outputs/onnx/stage2_distill.onnx \
+    --int8-onnx outputs/onnx/stage2_distill_int8.onnx \
+    --out-dir outputs/latency
+```
+
+Measured on an AMD EPYC 7763 with input `(1,3,6000)`, one CPU thread, ORT
+sequential execution, 20 excluded warmups, and 200 measured runs per backend:
+
+| backend | p50 | p95 | mean | throughput |
+|---|---:|---:|---:|---:|
+| PyTorch CPU | 3.149 ms | 4.119 ms | 3.371 ms | 296.7 windows/s |
+| FP32 ONNX Runtime | 1.543 ms | 1.571 ms | 1.567 ms | 638.0 windows/s |
+| INT8 ONNX Runtime | **1.226 ms** | **1.253 ms** | **1.233 ms** | **811.0 windows/s** |
+
+INT8 ONNX is 1.27× faster than FP32 ONNX and 2.73× faster than PyTorch by
+mean latency on this host. Results are hardware-specific; rerun the same command
+on Raspberry Pi or Graviton targets. Reports:
+`outputs/latency/latency_report.json` and `outputs/latency/latency_report.md`.
+CUDA was not benchmarked because Phase 5 targets CPU deployment.
+
+### Remaining Phase 5 step (not started)
+
+1. **Streaming wrapper** — consume a continuous stream in overlapping 60 s / 30 s-hop
    windows, merge predictions, emit pick timestamps; demo over a long concatenated
    test signal.
 

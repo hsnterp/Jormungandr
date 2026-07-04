@@ -170,6 +170,7 @@ deploy:
     calibration_traces: 500
     keep_head_fp32: true     # fallback if picks degrade under INT8
   benchmark:
+    warmup_runs: 20
     n_runs: 200
     threads: 1
   streaming:

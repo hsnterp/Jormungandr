@@ -18,7 +18,7 @@ architecture as Stage 1 — distillation only changed the weights.
 | 2 | 1D U-Net (48,051 params, 38.1 MFLOPs, INT8-friendly ops) | ✅ complete & verified |
 | 3 | training — Stage 1 supervised + Stage 2 distillation | ✅ complete |
 | 4 | evaluation — F1 / pick MAE / SNR buckets / EQT baseline / threshold tuning | ✅ complete |
-| 5 | deployment — ONNX → INT8 → latency → streaming | 🟡 ONNX export + parity + INT8 quantization done; latency/streaming pending |
+| 5 | deployment — ONNX → INT8 → latency → streaming | 🟡 ONNX + INT8 + latency benchmark done; streaming pending |
 
 **Headline test-split numbers** (7,781 traces: 4,957 eq / 2,824 noise; identical
 split + tolerances across all rows):
@@ -144,6 +144,27 @@ max 0.92 / mean 2.6e-2; the worst-case output error does not translate into a
 large aggregate task-metric shift. Reports: `outputs/onnx/quantization_report.json`,
 `outputs/stage2_int8_eval/int8_eval.json`.
 
+**CPU latency benchmark** (Phase 5c, done):
+```bash
+python scripts/benchmark_latency.py --config configs/default.yaml \
+    --checkpoint checkpoints/stage2_distill/best.pt \
+    --fp32-onnx outputs/onnx/stage2_distill.onnx \
+    --int8-onnx outputs/onnx/stage2_distill_int8.onnx \
+    --out-dir outputs/latency
+```
+AMD EPYC 7763; input `(1,3,6000)`; one CPU thread; ORT sequential execution;
+20 warmups excluded + 200 measured runs per backend:
+
+| backend | p50 | p95 | mean | throughput |
+|---|---:|---:|---:|---:|
+| PyTorch CPU | 3.149 ms | 4.119 ms | 3.371 ms | 296.7 windows/s |
+| FP32 ONNX Runtime | 1.543 ms | 1.571 ms | 1.567 ms | 638.0 windows/s |
+| INT8 ONNX Runtime | **1.226 ms** | **1.253 ms** | **1.233 ms** | **811.0 windows/s** |
+
+INT8 ONNX mean latency is **1.27× faster than FP32 ONNX** and **2.73× faster
+than PyTorch** on this host. Reports: `outputs/latency/latency_report.json` and
+`outputs/latency/latency_report.md`. CUDA was not benchmarked; deployment is CPU-only.
+
 ---
 
 ## 4. Known caveats
@@ -173,6 +194,8 @@ large aggregate task-metric shift. Reports: `outputs/onnx/quantization_report.js
   (still under the 300k budget) if accuracy plateaus.
 - **ONNX export:** torch 2.12's default dynamo path needs `onnxscript`;
   `export_onnx.py` uses the legacy exporter (`dynamo=False`) to stay dependency-light.
+- **Latency is hardware-specific.** Current numbers are from an AMD EPYC 7763
+  host with one thread; rerun `benchmark_latency.py` on Raspberry Pi / Graviton.
 
 ---
 
@@ -184,8 +207,9 @@ large aggregate task-metric shift. Reports: `outputs/onnx/quantization_report.js
    0.104 MB, 1.95× smaller). Static QDQ, 500 val calibration traces; full-test F1
    0.9944 → 0.9920 (no meaningful loss). Head-FP32 fallback tried and found
    equivalent, so full INT8 shipped. `scripts/quantize_onnx.py`.
-4. **Latency benchmark** — ⬜ TODO. ms per 60 s window, single CPU thread, p50/p95
-   over 200 runs; dependency-light so it re-runs on Raspberry Pi / ARM Graviton.
+4. **Latency benchmark** — ✅ done (`scripts/benchmark_latency.py`). One thread,
+   20 warmups + 200 runs on AMD EPYC 7763; INT8 ONNX p50/p95/mean =
+   1.226/1.253/1.233 ms (811.0 windows/s). Rerun on Raspberry Pi / Graviton.
 5. **Streaming wrapper** — ⬜ TODO. Consume a continuous stream in overlapping
    60 s / 30 s-hop windows, merge predictions, emit pick timestamps; demo script
    over a long concatenated test signal. Bake in a recommended operating point
