@@ -1,7 +1,7 @@
 # Exact environment used for the published verification results (Python 3.12).
 torch==2.12.1
 seisbench==0.11.7
-numpy==2.5.0
+numpy==2.5.1
 scipy==1.18.0
 matplotlib==3.11.0
 PyYAML==6.0.3
