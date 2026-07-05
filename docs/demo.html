@@ -12,15 +12,6 @@
     --det:#52514e; --p:#2a78d6; --s:#eb6834;
     --tp:#4a3aa7; --ts:#e87ba4; --pick:#12855f;
   }
-  @media (prefers-color-scheme: dark){
-    :root{
-      --surface:#0f1216; --panel:#171b21; --ink:#eceef1; --muted:#9aa0a8;
-      --line:#2a2f37; --grid:#20252c; --accent:#5aa2f0;
-      --z:#5aa2f0; --n:#9aa0a8; --e:#86b6ef;
-      --det:#b8bcc2; --p:#5aa2f0; --s:#f0895c;
-      --tp:#9d8cf0; --ts:#f0a3c2; --pick:#3fce93;
-    }
-  }
   *{box-sizing:border-box}
   html,body{margin:0}
   body{
@@ -51,6 +42,12 @@
   .bar .replay{border:1px solid var(--line); background:transparent; color:var(--ink);
     border-radius:8px; padding:6px 12px; cursor:pointer; font-size:13px}
   .bar .replay:hover{border-color:var(--accent)}
+  .chanToggle{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted)}
+  .chanToggle .ctLabel{margin-right:2px}
+  .chanBtn{appearance:none; border:1px solid var(--line); background:transparent; color:var(--muted);
+    border-radius:6px; width:26px; height:24px; font-size:11px; font-weight:650; cursor:pointer; line-height:1}
+  .chanBtn:hover{border-color:var(--accent)}
+  .chanBtn.active{border-color:var(--z); color:var(--z); background:color-mix(in srgb,var(--z) 12%, transparent)}
   .legend{display:flex; flex-wrap:wrap; gap:14px; font-size:12px; color:var(--muted)}
   .legend span{display:inline-flex; align-items:center; gap:6px; white-space:nowrap}
   .legend i{display:inline-block; width:22px; height:0; border-top-width:2.5px; border-top-style:solid}
@@ -65,6 +62,19 @@
   .readout .verdict{font-size:15px; font-weight:600; margin:0 0 12px}
   .readout .verdict.ok{color:var(--pick)}
   .readout .verdict.warn{color:var(--s)}
+
+  .cmp{display:grid; grid-template-columns:auto 1fr 1fr; gap:3px 14px; margin:0 0 16px;
+    border:1px solid var(--line); border-radius:10px; padding:12px 14px; background:var(--surface)}
+  .cmp .hd{font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--muted);
+    padding-bottom:7px; border-bottom:1px solid var(--line); margin-bottom:5px}
+  .cmp .hd.parent{color:var(--tp)}
+  .cmp .hd.student{color:var(--pick)}
+  .cmp .lbl{font-size:13px; color:var(--muted); display:flex; align-items:center}
+  .cmp .v{font-size:14px; font-variant-numeric:tabular-nums; font-weight:600; text-align:right;
+    padding:3px 8px; border-radius:6px}
+  .cmp .v.win.parent{background:color-mix(in srgb,var(--tp) 14%, transparent); color:var(--tp)}
+  .cmp .v.win.student{background:color-mix(in srgb,var(--pick) 14%, transparent); color:var(--pick)}
+
   .grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:14px 22px}
   .metric .lbl{font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em}
   .metric .val{font-size:20px; font-weight:650; font-variant-numeric:tabular-nums; margin-top:2px}
@@ -87,8 +97,13 @@
 
   <div class="bar">
     <button class="replay" id="replay">↻ Replay</button>
+    <div class="chanToggle" id="chanToggle">
+      <span class="ctLabel">Waveform:</span>
+      <button class="chanBtn active" data-ch="Z">Z</button>
+      <button class="chanBtn" data-ch="N">N</button>
+      <button class="chanBtn" data-ch="E">E</button>
+    </div>
     <div class="legend">
-      <span><i style="border-color:var(--z)"></i>Z / N / E waveform</span>
       <span><i style="border-color:var(--det)"></i>Detection</span>
       <span><i style="border-color:var(--p)"></i>P prob</span>
       <span><i style="border-color:var(--s)"></i>S prob</span>
@@ -133,6 +148,7 @@ const cv = document.getElementById('cv');
 const ctx = cv.getContext('2d');
 let DATA = null, TRACE = null, raf = null, t0 = 0;
 const DUR = 2600; // ms streaming reveal
+const activeChans = new Set(['Z']); // waveform defaults to Z only to keep the chart readable
 
 // ---- data loading: fetch first, fall back to inline copy -------------------
 async function load(){
@@ -173,6 +189,15 @@ const botY1 = () => PAD.t + topH + gap + botH;
 // ---- drawing ---------------------------------------------------------------
 function clear(c){ ctx.fillStyle=c.surface; ctx.fillRect(0,0,W,H); }
 
+function panelLabel(c, text, x, y){
+  ctx.font='11px sans-serif';
+  const padX=6, w=ctx.measureText(text).width+padX*2, h=16;
+  ctx.fillStyle=c.panel;
+  ctx.beginPath(); ctx.roundRect(x,y,w,h,4); ctx.fill();
+  ctx.fillStyle=c.muted; ctx.textAlign='left'; ctx.textBaseline='middle';
+  ctx.fillText(text, x+padX, y+h/2+1);
+}
+
 function axes(c){
   ctx.strokeStyle=c.grid; ctx.fillStyle=c.muted; ctx.lineWidth=1;
   ctx.font='11px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='top';
@@ -193,16 +218,20 @@ function axes(c){
   ctx.strokeStyle=c.det; ctx.globalAlpha=.35; ctx.setLineDash([4,4]);
   ctx.beginPath(); ctx.moveTo(PAD.l,yt); ctx.lineTo(W-PAD.r,yt); ctx.stroke();
   ctx.setLineDash([]); ctx.globalAlpha=1;
-  // panel labels
-  ctx.textAlign='left'; ctx.textBaseline='top'; ctx.fillStyle=c.muted; ctx.font='11px sans-serif';
-  ctx.fillText('raw 3-channel waveform (per-channel normalized)', PAD.l+2, topY0()+2);
-  ctx.fillText('detection · P · S probability', PAD.l+2, botY0()+2);
+  // divider between the two panels so they read as separate sections
+  const dy = botY0()-gap/2;
+  ctx.strokeStyle=c.line; ctx.globalAlpha=1; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(PAD.l,dy); ctx.lineTo(W-PAD.r,dy); ctx.stroke();
+  // panel labels as pill badges, not floating text
+  panelLabel(c, 'waveform', PAD.l+2, topY0()+2);
+  panelLabel(c, 'detection · P · S probability', PAD.l+2, botY0()+2);
 }
 
 function waveform(c, upto){
   const T = DATA.meta.time_axis_s;
-  const chans = [['Z',c.z],['N',c.n],['E',c.e]];
-  const bandH = topH/3;
+  const all = [['Z',c.z],['N',c.n],['E',c.e]];
+  const chans = all.filter(([name])=>activeChans.has(name));
+  const bandH = topH/chans.length;
   chans.forEach(([name,col],ci)=>{
     const d = TRACE.waveform[name];
     const midY = topY0() + bandH*(ci+0.5);
@@ -215,7 +244,8 @@ function waveform(c, upto){
     }
     ctx.stroke(); ctx.globalAlpha=1;
     ctx.fillStyle=col; ctx.font='bold 11px sans-serif'; ctx.textAlign='left'; ctx.textBaseline='middle';
-    ctx.fillText(name, PAD.l+2, midY-bandH*0.34);
+    const labelY = Math.max(midY-bandH*0.34, topY0()+22);
+    ctx.fillText(name, PAD.l+2, labelY);
   });
 }
 
@@ -229,15 +259,17 @@ function stream(c, arr, col, upto, w){
   ctx.stroke();
 }
 
-function vline(c, t, col, dash, label){
+function vline(c, t, col, dash, label, row){
   if(t==null) return;
   const x=xAt(t);
   ctx.strokeStyle=col; ctx.lineWidth=1.5; ctx.setLineDash(dash); ctx.globalAlpha=.9;
   ctx.beginPath(); ctx.moveTo(x,topY0()); ctx.lineTo(x,botY1()); ctx.stroke();
   ctx.setLineDash([]); ctx.globalAlpha=1;
   if(label){
-    ctx.fillStyle=col; ctx.font='bold 10px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='bottom';
-    ctx.fillText(label, x, topY0()-1<PAD.t? topY0()+10 : topY0()+10);
+    // stacked by role (ground truth / teacher / student) so nearby picks
+    // don't render as illegible overlapping text
+    ctx.fillStyle=col; ctx.font='bold 10px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='top';
+    ctx.fillText(label, x, topY0()+2+row*11);
   }
 }
 
@@ -260,12 +292,12 @@ function render(frac){
   stream(c, TRACE.student.s, c.s, upto, 1.4);
   // markers reveal as the stream front passes them
   const show = t => t!=null && t<=frontT+1e-6;
-  if(show(TRACE.truth.p_s)) vline(c, TRACE.truth.p_s, c.p, [6,4], 'GT P');
-  if(show(TRACE.truth.s_s)) vline(c, TRACE.truth.s_s, c.s, [6,4], 'GT S');
-  if(show(TRACE.teacher.p_s)) vline(c, TRACE.teacher.p_s, c.tp, [1,3], 'EQT P');
-  if(show(TRACE.teacher.s_s)) vline(c, TRACE.teacher.s_s, c.ts, [1,3], 'EQT S');
-  if(show(TRACE.student_pick.p_s)) vline(c, TRACE.student_pick.p_s, c.pick, [], 'P̂');
-  if(show(TRACE.student_pick.s_s)) vline(c, TRACE.student_pick.s_s, c.pick, [], 'Ŝ');
+  if(show(TRACE.truth.p_s)) vline(c, TRACE.truth.p_s, c.p, [6,4], 'GT P', 0);
+  if(show(TRACE.truth.s_s)) vline(c, TRACE.truth.s_s, c.s, [6,4], 'GT S', 0);
+  if(show(TRACE.teacher.p_s)) vline(c, TRACE.teacher.p_s, c.tp, [1,3], 'EQT P', 1);
+  if(show(TRACE.teacher.s_s)) vline(c, TRACE.teacher.s_s, c.ts, [1,3], 'EQT S', 1);
+  if(show(TRACE.student_pick.p_s)) vline(c, TRACE.student_pick.p_s, c.pick, [], 'P̂', 2);
+  if(show(TRACE.student_pick.s_s)) vline(c, TRACE.student_pick.s_s, c.pick, [], 'Ŝ', 2);
   sweep(c, frac);
 }
 
@@ -284,6 +316,28 @@ function animate(){
 
 // ---- readout ---------------------------------------------------------------
 function fmtS(v){ return v==null? '—' : v.toFixed(2)+' s'; }
+
+// one row of the parent-vs-student pick comparison: prediction time + signed
+// error against ground truth, so the two models line up side by side instead
+// of being buried in prose or thin dotted lines on the chart.
+function fmtPick(pred, truth){
+  if(pred==null) return {txt:'—', err:null};
+  const errMs = truth==null? null : (pred-truth)*1000;
+  const err = errMs==null? '' : ` <small>(Δ${errMs>=0?'+':''}${Math.round(errMs)}ms)</small>`;
+  return {txt:pred.toFixed(2)+'s'+err, err: errMs==null?null:Math.abs(errMs)};
+}
+function cmpTable(t){
+  const gt=t.truth, pP=fmtPick(t.teacher.p_s,gt.p_s), sP=fmtPick(t.student_pick.p_s,gt.p_s),
+    pS=fmtPick(t.teacher.s_s,gt.s_s), sS=fmtPick(t.student_pick.s_s,gt.s_s);
+  const winner=(a,b)=> a.err!=null && b.err!=null ? (a.err<b.err?'parent':(b.err<a.err?'student':null)) : null;
+  const wP=winner(pP,sP), wS=winner(pS,sS);
+  const cell=(r,side,w)=>`<div class="v ${side} ${w===side?'win':''}">${r.txt}</div>`;
+  return `<div class="cmp">
+    <div class="hd"></div><div class="hd parent">Parent · EQTransformer</div><div class="hd student">Student · Jormungandr</div>
+    <div class="lbl">P arrival</div>${cell(pP,'parent',wP)}${cell(sP,'student',wP)}
+    <div class="lbl">S arrival</div>${cell(pS,'parent',wS)}${cell(sS,'student',wS)}
+  </div>`;
+}
 function readout(){
   const t=TRACE, sp=t.student_pick, ro=document.getElementById('readout');
   const thr=DATA.meta.thresholds.detection;
@@ -306,10 +360,10 @@ function readout(){
   const metric=(lbl,val,sub)=>`<div class="metric"><div class="lbl">${lbl}</div><div class="val">${val}${sub?` <small>${sub}</small>`:''}</div></div>`;
   ro.innerHTML = `<h3>Model readout — ${t.label}</h3>`+
     `<p class="verdict ${cls}">${verdict}</p>`+
+    (t.is_earthquake ? cmpTable(t) : '') +
     `<div class="grid">`+
-      metric('Predicted P', fmtS(sp.p_s), sp.p_conf!=null?`conf ${sp.p_conf}`:'') +
-      metric('Predicted S', fmtS(sp.s_s), sp.s_conf!=null?`conf ${sp.s_conf}`:'') +
       metric('Peak detection', sp.det_max.toFixed(2), `thr ${thr.toFixed(2)}`) +
+      metric('P / S confidence', `${sp.p_conf ?? '—'} / ${sp.s_conf ?? '—'}`, '') +
       metric('Inference latency', `${t.inference_latency_ms.toFixed(1)}`, 'ms / 60 s window') +
       metric('Edge latency', `${DATA.meta.edge_latency_ms.int8_p50}`, 'ms · Pi 5 INT8') +
       metric('SNR', t.snr_label, '') +
@@ -336,6 +390,18 @@ function select(i){
 }
 
 // ---- boot ------------------------------------------------------------------
+document.getElementById('chanToggle').addEventListener('click', e=>{
+  const b = e.target.closest('.chanBtn'); if(!b) return;
+  const ch = b.dataset.ch;
+  if(activeChans.has(ch)){
+    if(activeChans.size===1) return; // keep at least one channel visible
+    activeChans.delete(ch);
+  }else{
+    activeChans.add(ch);
+  }
+  b.classList.toggle('active', activeChans.has(ch));
+  if(TRACE) render(1);
+});
 window.addEventListener('resize', ()=>{ resize(); if(TRACE) render(1); });
 load().then(d=>{
   DATA=d;
