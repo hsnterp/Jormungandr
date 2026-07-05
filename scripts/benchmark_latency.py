@@ -6,6 +6,10 @@ same fixed float32 input of shape (1, 3, 6000). Warmup calls are excluded from
 the measured samples. CPU execution is single-threaded by default for both
 PyTorch and ONNX Runtime.
 
+PyTorch is optional: on hosts without it installed (e.g. a Raspberry Pi
+ONNX-only deployment), the PyTorch backend is skipped with a printed message
+and only the FP32/INT8 ONNX Runtime backends are benchmarked.
+
 This script does not load STEAD, retrain, quantize, or perform streaming work.
 
 Usage:
@@ -31,12 +35,17 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 import numpy as np
-import torch
+
+try:
+    import torch
+    HAS_TORCH = True
+except ImportError:
+    torch = None
+    HAS_TORCH = False
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from seismic_edge_picker.config import load_config  # noqa: E402
-from seismic_edge_picker.model import build_model  # noqa: E402
 
 INPUT_NAME = "waveform"
 OUTPUT_NAME = "streams"
@@ -68,6 +77,8 @@ def positive_int(name, value):
 
 
 def load_student(cfg, checkpoint):
+    from seismic_edge_picker.model import build_model
+
     ckpt = torch.load(checkpoint, map_location="cpu", weights_only=True)
     model = build_model(cfg)
     model.load_state_dict(ckpt["model_state_dict"])
@@ -128,7 +139,9 @@ def markdown_report(report):
     b = report["benchmark"]
     rows = []
     for key in ("pytorch_cpu", "fp32_onnx_cpu", "int8_onnx_cpu"):
-        r = report["results"][key]
+        r = report["results"].get(key)
+        if r is None:
+            continue
         rows.append(
             f"| {r['label']} | {r['p50_ms']:.3f} | {r['p95_ms']:.3f} | "
             f"{r['mean_ms']:.3f} | {r['throughput_windows_per_s']:.1f} |"
@@ -169,31 +182,30 @@ def main():
     checkpoint = Path(args.checkpoint)
     fp32_path = Path(args.fp32_onnx)
     int8_path = Path(args.int8_onnx)
-    for label, path in (
-        ("checkpoint", checkpoint),
-        ("FP32 ONNX", fp32_path),
-        ("INT8 ONNX", int8_path),
-    ):
+    required = [("FP32 ONNX", fp32_path), ("INT8 ONNX", int8_path)]
+    if HAS_TORCH:
+        required.append(("checkpoint", checkpoint))
+    else:
+        print(
+            "PyTorch is not installed; skipping the PyTorch CPU benchmark and "
+            "running ONNX Runtime backends only."
+        )
+    for label, path in required:
         if not path.is_file():
             raise SystemExit(f"{label} not found: {path}")
 
-    torch.set_num_threads(threads)
-    torch.set_num_interop_threads(1)
+    if HAS_TORCH:
+        torch.set_num_threads(threads)
+        torch.set_num_interop_threads(1)
 
     import onnxruntime as ort
 
     rng = np.random.default_rng(args.seed)
     input_shape = (1, cfg.data.n_channels, cfg.data.window_samples)
     x_np = rng.standard_normal(input_shape).astype(np.float32)
-    x_torch = torch.from_numpy(x_np)
 
-    model, ckpt = load_student(cfg, checkpoint)
     fp32_session = make_ort_session(fp32_path, threads, ort)
     int8_session = make_ort_session(int8_path, threads, ort)
-
-    @torch.inference_mode()
-    def pytorch_call():
-        return model(x_torch)
 
     def fp32_call():
         return fp32_session.run([OUTPUT_NAME], {INPUT_NAME: x_np})[0]
@@ -202,15 +214,25 @@ def main():
         return int8_session.run([OUTPUT_NAME], {INPUT_NAME: x_np})[0]
 
     calls = {
-        "pytorch_cpu": ("PyTorch CPU", pytorch_call),
         "fp32_onnx_cpu": ("FP32 ONNX Runtime", fp32_call),
         "int8_onnx_cpu": ("INT8 ONNX Runtime", int8_call),
     }
 
+    ckpt = None
+    if HAS_TORCH:
+        x_torch = torch.from_numpy(x_np)
+        model, ckpt = load_student(cfg, checkpoint)
+
+        @torch.inference_mode()
+        def pytorch_call():
+            return model(x_torch)
+
+        calls["pytorch_cpu"] = ("PyTorch CPU", pytorch_call)
+
     expected_shape = (1, cfg.model.out_channels, cfg.data.window_samples)
     for _key, (label, call) in calls.items():
         output = call()
-        if isinstance(output, torch.Tensor):
+        if HAS_TORCH and isinstance(output, torch.Tensor):
             output = output.numpy()
         if output.shape != expected_shape or not np.isfinite(output).all():
             raise SystemExit(
@@ -234,8 +256,8 @@ def main():
         )
 
     report = {
-        "checkpoint": str(checkpoint),
-        "checkpoint_epoch": ckpt.get("epoch"),
+        "checkpoint": str(checkpoint) if HAS_TORCH else None,
+        "checkpoint_epoch": ckpt.get("epoch") if ckpt is not None else None,
         "fp32_onnx": str(fp32_path),
         "int8_onnx": str(int8_path),
         "benchmark": {
@@ -256,7 +278,7 @@ def main():
             "logical_cpu_count": os.cpu_count(),
             "platform": platform.platform(),
             "python": platform.python_version(),
-            "torch": torch.__version__,
+            "torch": torch.__version__ if HAS_TORCH else "not installed",
             "onnxruntime": ort.__version__,
             "numpy": np.__version__,
         },
