@@ -409,7 +409,18 @@ sequential execution, 20 excluded warmups, and 200 measured runs per backend:
 | INT8 ONNX Runtime | **1.226 ms** | **1.253 ms** | **1.233 ms** | **811.0 windows/s** |
 
 INT8 ONNX is 1.27× faster than FP32 ONNX and 2.73× faster than PyTorch by
-mean latency on this host. Results are hardware-specific; rerun the same command
+mean latency on this host. Results are hardware-specific;
+
+Raspberry Pi CPU result, measured on-device with one ONNX Runtime CPU thread:
+
+| backend | p50 | p95 | mean | throughput |
+|---|---:|---:|---:|---:|
+| FP32 ONNX Runtime | 3.095 ms | 3.164 ms | 3.106 ms | 322.0 windows/s |
+| INT8 ONNX Runtime | 2.392 ms | 2.400 ms | 2.392 ms | 418.1 windows/s |
+
+On Raspberry Pi, the INT8 model processes one 60 s, 3-channel window in 2.392 ms using one CPU thread. With the default 30 s streaming hop, this is over 12,000× faster than real time.
+
+rerun the same command
 on Raspberry Pi or Graviton targets. Reports:
 `outputs/latency/latency_report.json` and `outputs/latency/latency_report.md`.
 CUDA was not benchmarked because Phase 5 targets CPU deployment.
@@ -425,6 +436,7 @@ the INT8 ONNX model and one ORT CPU thread by default:
 python scripts/stream_infer.py --demo-traces 4 --plot --save-probabilities \
     --out-dir outputs/streaming_demo
 ```
+This was also smoke-tested on a Raspberry Pi with a 240 s synthetic 3-channel signal. The INT8 ONNX streaming path ran end-to-end on CPU and produced zero events on random-noise input, as expected.
 
 The smoke demo concatenated four test traces (two earthquake, two noise) into a
 240 s signal. Seven 60 s windows at a 30 s hop produced **2 coalesced events,
