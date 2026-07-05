@@ -25,7 +25,7 @@ research model (EQTransformer) and compressing it into something that:
 
 ## Live demo
 
-**▶ [Interactive streaming demo](https://hsnterp.github.io/Jormungandr/docs/demo.html)**
+**▶ [Interactive streaming demo](https://hsnterp.github.io/Jormungandr/demo.html)**
 — replays six STEAD test traces as a live left-to-right stream: the raw
 3-channel waveform arrives while the student model's detection / P / S
 probability streams respond in sync, with ground-truth arrivals (dashed) and
@@ -36,10 +36,10 @@ miss). Self-contained page in [`docs/demo.html`](docs/demo.html), data in
 [`outputs/figures/demo_traces.json`](outputs/figures/demo_traces.json)
 (exported by `scripts/export_demo_traces.py`).
 
-> GitHub Pages is served from `main` (root, via Jekyll), so the demo publishes at
-> the `/docs/demo.html` path above a minute or two after this commit lands. You
-> can also open `docs/demo.html` locally (it embeds an offline copy of the data),
-> or serve the folder with `python -m http.server`.
+> GitHub Pages is served from the `/docs` folder on `main`, so the demo publishes
+> at the URL above a minute or two after a commit lands. You can also open
+> `docs/demo.html` locally (it embeds an offline copy of the data), or serve the
+> folder with `python -m http.server`.
 
 ## Task formulation
 
