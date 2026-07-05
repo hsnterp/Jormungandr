@@ -1,0 +1,9 @@
+Phase 5d streaming inference
+model: outputs/onnx/stage2_distill_int8.onnx (ONNX Runtime CPU, 1 thread(s))
+input: outputs/pi_synthetic_signal.npy
+signal: 24000 samples / 240.0 s at 100 Hz
+windows: 7 x 60 s, hop 30 s; uniform overlap mean
+operating point: detection >= 0.8 for >= 10 ms; merge gap <= 0.5 s; P/S >= 0.3/0.3
+output: 0 events, 0 P picks, 0 S picks (0 associated)
+timestamps are seconds relative to the start of the input array
+low-false-alarm note: INT8 streaming has not been separately retuned; do not assume the FP32 0.90 + 500 ms point transfers unchanged.

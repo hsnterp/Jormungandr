@@ -1,0 +1,53 @@
+{
+  "model": "outputs/onnx/stage2_distill_int8.onnx",
+  "backend": "ONNX Runtime CPUExecutionProvider",
+  "onnxruntime_version": "1.27.0",
+  "input": "outputs/pi_synthetic_signal.npy",
+  "input_preprocessed": false,
+  "sampling_rate_hz": 100.0,
+  "signal_samples": 24000,
+  "signal_duration_s": 240.0,
+  "window_s": 60.0,
+  "hop_s": 30.0,
+  "window_samples": 6000,
+  "hop_samples": 3000,
+  "window_starts": [
+    0,
+    3000,
+    6000,
+    9000,
+    12000,
+    15000,
+    18000
+  ],
+  "n_windows": 7,
+  "merge": "uniform mean over overlapping window probabilities",
+  "threads": 1,
+  "batch_size": 1,
+  "inference_wall_seconds": 0.039157185000021855,
+  "operating_point": {
+    "detection_threshold": 0.8,
+    "min_duration_ms": 10.0,
+    "event_merge_gap_s": 0.5,
+    "p_threshold": 0.3,
+    "s_threshold": 0.3,
+    "peak_min_distance_s": 1.0,
+    "association_margin_s": 1.0
+  },
+  "counts": {
+    "events": 0,
+    "p_picks": 0,
+    "s_picks": 0,
+    "associated_picks": 0,
+    "unassociated_candidates_filtered": 0
+  },
+  "events": [],
+  "picks": [],
+  "sources": [
+    {
+      "mode": "npy",
+      "path": "outputs/pi_synthetic_signal.npy"
+    }
+  ],
+  "operating_point_note": "0.80 + 10 ms is the Stage 2 FP32 max-F1 point and was evaluated for INT8 at threshold 0.80. A separate low-false-alarm INT8 streaming threshold has not been calibrated."
+}
