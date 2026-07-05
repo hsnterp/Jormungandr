@@ -48,9 +48,25 @@
     border-radius:6px; width:26px; height:24px; font-size:11px; font-weight:650; cursor:pointer; line-height:1}
   .chanBtn:hover{border-color:var(--accent)}
   .chanBtn.active{border-color:var(--z); color:var(--z); background:color-mix(in srgb,var(--z) 12%, transparent)}
+  .layerToggle{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted)}
+  .layerToggle .ctLabel{margin-right:2px}
+  .layerBtn{appearance:none; border:1px solid var(--line); background:transparent; color:var(--muted);
+    border-radius:7px; padding:4px 10px; font-size:12px; font-weight:600; cursor:pointer; line-height:1.2}
+  .layerBtn:hover{border-color:var(--accent)}
+  .layerBtn[data-layer="truth"].active{border-color:var(--ink); color:var(--ink); background:color-mix(in srgb,var(--ink) 8%, transparent)}
+  .layerBtn[data-layer="teacher"].active{border-color:var(--tp); color:var(--tp); background:color-mix(in srgb,var(--tp) 12%, transparent)}
+  .layerBtn[data-layer="student"].active{border-color:var(--pick); color:var(--pick); background:color-mix(in srgb,var(--pick) 12%, transparent)}
   .legend{display:flex; flex-wrap:wrap; gap:14px; font-size:12px; color:var(--muted)}
   .legend span{display:inline-flex; align-items:center; gap:6px; white-space:nowrap}
   .legend i{display:inline-block; width:22px; height:0; border-top-width:2.5px; border-top-style:solid}
+
+  .closeups{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:14px}
+  .closeup{border:1px solid var(--line); border-radius:14px; background:var(--panel); padding:10px 12px 6px}
+  .closeup canvas{display:block; width:100%; height:auto}
+  .cuHead{font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--muted);
+    margin-bottom:4px; display:flex; justify-content:space-between; gap:8px}
+  .cuHead .cuNote{font-weight:650; color:var(--ink); text-transform:none; letter-spacing:0; font-size:11.5px}
+  @media (max-width:640px){ .closeups{grid-template-columns:1fr} }
 
   .card{border:1px solid var(--line); border-radius:14px; background:var(--panel);
     padding:14px 14px 10px; margin-top:4px}
@@ -103,17 +119,31 @@
       <button class="chanBtn" data-ch="N">N</button>
       <button class="chanBtn" data-ch="E">E</button>
     </div>
+    <div class="layerToggle" id="layerToggle">
+      <span class="ctLabel">Show:</span>
+      <button class="layerBtn active" data-layer="truth">Ground truth</button>
+      <button class="layerBtn active" data-layer="teacher">EQT teacher</button>
+      <button class="layerBtn active" data-layer="student">Student pick</button>
+    </div>
     <div class="legend">
       <span><i style="border-color:var(--det)"></i>Detection</span>
       <span><i style="border-color:var(--p)"></i>P prob</span>
       <span><i style="border-color:var(--s)"></i>S prob</span>
-      <span><i style="border-color:var(--pick);border-top-style:solid"></i>Student pick</span>
-      <span><i style="border-color:var(--ink);border-top-style:dashed"></i>Ground truth</span>
-      <span><i style="border-color:var(--tp);border-top-style:dotted"></i>EQT teacher</span>
     </div>
   </div>
 
   <div class="card"><canvas id="cv"></canvas></div>
+
+  <div class="closeups" id="closeups">
+    <div class="closeup">
+      <div class="cuHead"><span>P arrival close-up</span><span class="cuNote" id="cuNoteP"></span></div>
+      <canvas id="cvP"></canvas>
+    </div>
+    <div class="closeup">
+      <div class="cuHead"><span>S arrival close-up</span><span class="cuNote" id="cuNoteS"></span></div>
+      <canvas id="cvS"></canvas>
+    </div>
+  </div>
 
   <div class="readout" id="readout">
     <h3>Model readout</h3>
@@ -149,6 +179,7 @@ const ctx = cv.getContext('2d');
 let DATA = null, TRACE = null, raf = null, t0 = 0;
 const DUR = 2600; // ms streaming reveal
 const activeChans = new Set(['Z']); // waveform defaults to Z only to keep the chart readable
+const activeLayers = new Set(['truth','teacher','student']); // pick layers, all shown by default
 
 // ---- data loading: fetch first, fall back to inline copy -------------------
 async function load(){
@@ -290,15 +321,114 @@ function render(frac){
   stream(c, TRACE.student.detection, c.det, upto, 1.4);
   stream(c, TRACE.student.p, c.p, upto, 1.4);
   stream(c, TRACE.student.s, c.s, upto, 1.4);
-  // markers reveal as the stream front passes them
+  // markers reveal as the stream front passes them, gated by the layer filter
   const show = t => t!=null && t<=frontT+1e-6;
-  if(show(TRACE.truth.p_s)) vline(c, TRACE.truth.p_s, c.p, [6,4], 'GT P', 0);
-  if(show(TRACE.truth.s_s)) vline(c, TRACE.truth.s_s, c.s, [6,4], 'GT S', 0);
-  if(show(TRACE.teacher.p_s)) vline(c, TRACE.teacher.p_s, c.tp, [1,3], 'EQT P', 1);
-  if(show(TRACE.teacher.s_s)) vline(c, TRACE.teacher.s_s, c.ts, [1,3], 'EQT S', 1);
-  if(show(TRACE.student_pick.p_s)) vline(c, TRACE.student_pick.p_s, c.pick, [], 'P̂', 2);
-  if(show(TRACE.student_pick.s_s)) vline(c, TRACE.student_pick.s_s, c.pick, [], 'Ŝ', 2);
+  if(activeLayers.has('truth')){
+    if(show(TRACE.truth.p_s)) vline(c, TRACE.truth.p_s, c.p, [6,4], 'GT P', 0);
+    if(show(TRACE.truth.s_s)) vline(c, TRACE.truth.s_s, c.s, [6,4], 'GT S', 0);
+  }
+  if(activeLayers.has('teacher')){
+    if(show(TRACE.teacher.p_s)) vline(c, TRACE.teacher.p_s, c.tp, [1,3], 'EQT P', 1);
+    if(show(TRACE.teacher.s_s)) vline(c, TRACE.teacher.s_s, c.ts, [1,3], 'EQT S', 1);
+  }
+  if(activeLayers.has('student')){
+    if(show(TRACE.student_pick.p_s)) vline(c, TRACE.student_pick.p_s, c.pick, [], 'P̂', 2);
+    if(show(TRACE.student_pick.s_s)) vline(c, TRACE.student_pick.s_s, c.pick, [], 'Ŝ', 2);
+  }
   sweep(c, frac);
+}
+
+// ---- close-up panels --------------------------------------------------------
+// The full 60s window packs a ~50-200ms teacher/student offset into a couple
+// of pixels, so parent and student lines look identical even though the
+// numbers differ. These zoom into a ~1.2s window around each phase so the
+// offset is actually visible, independent of the layer filter above.
+const cvP = document.getElementById('cvP'), ctxP = cvP.getContext('2d');
+const cvS = document.getElementById('cvS'), ctxS = cvS.getContext('2d');
+
+function resizeCloseup(cv, ctx2){
+  const cssW = cv.parentElement.clientWidth;
+  const cssH = 140;
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(cssW*dpr); cv.height = Math.round(cssH*dpr);
+  cv.style.height = cssH+'px';
+  ctx2.setTransform(dpr,0,0,dpr,0,0);
+  return {w:cssW, h:cssH};
+}
+
+function renderCloseup(cv, ctx2, phase){
+  const c = C();
+  const {w,h} = resizeCloseup(cv, ctx2);
+  const pad = {l:34, r:10, t:38, b:18};
+  const note = document.getElementById(phase==='p'?'cuNoteP':'cuNoteS');
+  ctx2.clearRect(0,0,w,h);
+  ctx2.fillStyle=c.surface; ctx2.fillRect(0,0,w,h);
+
+  const truthT = TRACE.truth[phase+'_s'];
+  const teacherT = TRACE.teacher[phase+'_s'];
+  const studentT = TRACE.student_pick[phase+'_s'];
+  const known = [truthT, teacherT, studentT].filter(v=>v!=null);
+  if(known.length===0){
+    ctx2.fillStyle=c.muted; ctx2.font='12px sans-serif'; ctx2.textAlign='center'; ctx2.textBaseline='middle';
+    ctx2.fillText('no pick on this trace', w/2, h/2);
+    if(note) note.textContent='';
+    return;
+  }
+  const center = truthT!=null ? truthT : known.reduce((a,b)=>a+b,0)/known.length;
+  const half = 0.6;
+  const t0w = center-half, t1w = center+half;
+  const xAt = t => pad.l + ((t-t0w)/(t1w-t0w))*(w-pad.l-pad.r);
+  const y0 = pad.t, y1 = h-pad.b;
+
+  const T = DATA.meta.time_axis_s, arr = TRACE.student[phase];
+  ctx2.strokeStyle = phase==='p'?c.p:c.s; ctx2.lineWidth=1.6; ctx2.beginPath();
+  let started=false;
+  for(let i=0;i<T.length;i++){
+    if(T[i]<t0w||T[i]>t1w) continue;
+    const x=xAt(T[i]), y=y1-arr[i]*(y1-y0);
+    if(!started){ ctx2.moveTo(x,y); started=true; } else ctx2.lineTo(x,y);
+  }
+  if(started) ctx2.stroke();
+
+  ctx2.strokeStyle=c.grid; ctx2.lineWidth=1;
+  [0,0.5,1].forEach(v=>{
+    const y=y1-v*(y1-y0);
+    ctx2.beginPath(); ctx2.moveTo(pad.l,y); ctx2.lineTo(w-pad.r,y); ctx2.stroke();
+  });
+  ctx2.fillStyle=c.muted; ctx2.font='9px sans-serif'; ctx2.textAlign='center'; ctx2.textBaseline='top';
+  for(let dt=-0.6; dt<=0.6+1e-6; dt+=0.2){
+    const t=center+dt, x=xAt(t);
+    ctx2.strokeStyle=c.grid; ctx2.beginPath(); ctx2.moveTo(x,y0); ctx2.lineTo(x,y1); ctx2.stroke();
+    ctx2.fillStyle=c.muted;
+    ctx2.fillText(dt===0?'0':(dt>0?'+':'')+Math.round(dt*1000)+'ms', x, y1+3);
+  }
+
+  // fixed row per role (not per x-position) so labels never collide even when
+  // teacher/student/ground-truth land within a few ms of each other
+  const draw=(t,col,dash,label,row)=>{
+    if(t==null) return;
+    const x=xAt(t);
+    ctx2.strokeStyle=col; ctx2.lineWidth=2; ctx2.setLineDash(dash); ctx2.globalAlpha=.95;
+    ctx2.beginPath(); ctx2.moveTo(x,y0); ctx2.lineTo(x,y1); ctx2.stroke();
+    ctx2.setLineDash([]); ctx2.globalAlpha=1;
+    ctx2.fillStyle=col; ctx2.font='bold 10px sans-serif'; ctx2.textAlign='center'; ctx2.textBaseline='top';
+    ctx2.fillText(label, Math.min(Math.max(x,pad.l+16),w-pad.r-16), y0+2+row*11);
+  };
+  if(activeLayers.has('truth')) draw(truthT, c.ink, [6,4], 'GT', 0);
+  if(activeLayers.has('teacher')) draw(teacherT, phase==='p'?c.tp:c.ts, [1,3], 'EQT', 1);
+  if(activeLayers.has('student')) draw(studentT, c.pick, [], 'Student', 2);
+
+  if(note){
+    const parts=[];
+    if(teacherT!=null && truthT!=null) parts.push(`teacher Δ${teacherT-truthT>=0?'+':''}${Math.round((teacherT-truthT)*1000)}ms`);
+    if(studentT!=null && truthT!=null) parts.push(`student Δ${studentT-truthT>=0?'+':''}${Math.round((studentT-truthT)*1000)}ms`);
+    note.textContent = parts.join(' · ');
+  }
+}
+function renderCloseups(){
+  if(!TRACE) return;
+  renderCloseup(cvP, ctxP, 'p');
+  renderCloseup(cvS, ctxS, 's');
 }
 
 // ---- animation -------------------------------------------------------------
@@ -309,10 +439,11 @@ function animate(){
     const frac = Math.min(1, (now-t0)/DUR);
     render(frac);
     if(frac<1){ raf=requestAnimationFrame(step); }
-    else{ render(1); readout(); }
+    else{ render(1); readout(); renderCloseups(); }
   };
   raf = requestAnimationFrame(step);
 }
+
 
 // ---- readout ---------------------------------------------------------------
 function fmtS(v){ return v==null? '—' : v.toFixed(2)+' s'; }
@@ -402,7 +533,14 @@ document.getElementById('chanToggle').addEventListener('click', e=>{
   b.classList.toggle('active', activeChans.has(ch));
   if(TRACE) render(1);
 });
-window.addEventListener('resize', ()=>{ resize(); if(TRACE) render(1); });
+document.getElementById('layerToggle').addEventListener('click', e=>{
+  const b = e.target.closest('.layerBtn'); if(!b) return;
+  const layer = b.dataset.layer;
+  if(activeLayers.has(layer)) activeLayers.delete(layer); else activeLayers.add(layer);
+  b.classList.toggle('active', activeLayers.has(layer));
+  if(TRACE){ render(1); renderCloseups(); }
+});
+window.addEventListener('resize', ()=>{ resize(); if(TRACE){ render(1); renderCloseups(); } });
 load().then(d=>{
   DATA=d;
   if(d.meta && d.meta.description) document.getElementById('proj-desc').textContent =
