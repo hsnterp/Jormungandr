@@ -1,0 +1,30 @@
+building continuous signal from cached test traces ...
+────────────────────────────────────────────────────────────────────
+  Seismic edge picker — live streaming inference
+  model   : stage2_distill_int8.onnx  (ONNX Runtime 1.27.0, 1 thread, INT8)
+  signal  : 42,000 samples / 420 s  (3 events + noise gaps)
+  windows : 13 x 60 s, hop 30 s
+  trigger : detection ≥ 0.8, P/S peak ≥ 0.3/0.3, merge gap 15 s
+────────────────────────────────────────────────────────────────────
+  wall clock       window   latency   detection
+  21:12:48.243       1/13   2.81 ms   · quiet   ▃▁▁▁▁▂▂▁  max 0.27
+  21:12:48.446       2/13   2.91 ms   ● ARMED   ▁▃▂▁████  max 1.00
+  21:12:48.650       3/13   2.79 ms   ● ARMED   ████▆▅▄▅  max 1.00
+  21:12:48.854       4/13   3.14 ms   · quiet   ▂▄▃▁▁▁▂▁  max 0.40
+      ┏━ EVENT #1 @ 66.5–84.8s  peak 1.00   P   66.34s  S   79.07s
+  21:12:49.060       5/13   4.69 ms   · quiet   ▁▂▁▁▁▁▁▁  max 0.19
+  21:12:49.265       6/13   4.67 ms   ● ARMED   ▁▁▁▁██▁▁  max 1.00
+  21:12:49.472       7/13   5.28 ms   ● ARMED   ██▁▁▁▃▁▁  max 1.00
+  21:12:49.680       8/13   7.18 ms   ● ARMED   ▁▁▁▂█▁▁▁  max 0.97
+      ┏━ EVENT #2 @ 184.0–192.3s  peak 1.00   P  183.94s  S  187.70s
+  21:12:49.888       9/13   5.27 ms   · quiet   ▁▁▁▁▁▁▁▁  max 0.06
+  21:12:50.094      10/13   4.24 ms   ● ARMED   ▁▁▁▁███▃  max 1.00
+  21:12:50.302      11/13   6.39 ms   ● ARMED   ███▃▁▁▁▁  max 1.00
+  21:12:50.509      12/13   5.54 ms   ● ARMED   ▁▁▁▁█▁▁▁  max 0.89
+      ┏━ EVENT #3 @ 305.0–317.1s  peak 0.99   P  304.98s  S  310.55s
+  21:12:50.717      13/13   5.46 ms   · quiet   ▁▁▁▁▁▁▁▁  max 0.02
+────────────────────────────────────────────────────────────────────
+  streamed 13 windows | latency p50 4.69 ms  p95 6.70 ms  mean 4.64 ms
+  detected 3 event(s) over 420s of signal (3 earthquakes injected)
+  ground-truth arrivals: P 66.0s  S 78.9s  P 184.0s  S 187.7s  P 305.0s  S 310.5s
+────────────────────────────────────────────────────────────────────

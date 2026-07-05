@@ -38,6 +38,18 @@ outputs/streaming_demo/*
 !outputs/streaming_demo/summary.txt
 !outputs/streaming_demo/merged_probabilities.npz
 !outputs/streaming_demo/streaming_predictions.png
+# Fair student-vs-teacher re-evaluation
+!outputs/fair_eval/
+outputs/fair_eval/*
+!outputs/fair_eval/comparison.json
+# Evaluation figures + interactive-demo data
+!outputs/figures/
+outputs/figures/*
+!outputs/figures/*.png
+!outputs/figures/*.py
+!outputs/figures/*.md
+!outputs/figures/*.txt
+!outputs/figures/demo_traces.json
 
 # Python
 __pycache__/

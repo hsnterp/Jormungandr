@@ -23,6 +23,24 @@ research model (EQTransformer) and compressing it into something that:
 - runs **CPU-only** at the edge with predictable latency,
 - and holds up against the teacher on detection F1 and pick accuracy.
 
+## Live demo
+
+**▶ [Interactive streaming demo](https://hsnterp.github.io/Jormungandr/docs/demo.html)**
+— replays six STEAD test traces as a live left-to-right stream: the raw
+3-channel waveform arrives while the student model's detection / P / S
+probability streams respond in sync, with ground-truth arrivals (dashed) and
+EQTransformer teacher picks (dotted) overlaid and a per-trace latency /
+confidence readout. Cases include a clean high-SNR event, a near-threshold
+low-SNR event, pure noise (correct true-negative), and a failure case (8.9 s P
+miss). Self-contained page in [`docs/demo.html`](docs/demo.html), data in
+[`outputs/figures/demo_traces.json`](outputs/figures/demo_traces.json)
+(exported by `scripts/export_demo_traces.py`).
+
+> GitHub Pages is served from `main` (root, via Jekyll), so the demo publishes at
+> the `/docs/demo.html` path above a minute or two after this commit lands. You
+> can also open `docs/demo.html` locally (it embeds an offline copy of the data),
+> or serve the folder with `python -m http.server`.
+
 ## Task formulation
 
 | | |
@@ -212,8 +230,13 @@ tolerance ±500 ms), so every row is directly comparable.
 | Stage 2 distilled — default (thr 0.50) | 48,051 | 0.9649 | 0.9994 | 0.9819 | 180 | 3 | 36.9±56.3 ms | 71.4±109.4 ms |
 | Stage 1 supervised — max-F1 (thr 0.90 + 500 ms) | 48,051 | 0.9894 | 0.9964 | 0.9929 | 53 | 18 | 46.0±77.4 ms | 72.4±112.3 ms |
 | Stage 1 supervised — default (thr 0.50) | 48,051 | 0.9227 | 0.9998 | 0.9597 | 415 | 1 | 46.0±77.4 ms | 72.4±112.3 ms |
-| EQTransformer teacher (thr 0.50) | 376,935 | 0.993 | 0.979 | 0.9860 | 35 | 103 | 62.8±88.4 ms | 78.9±117.5 ms |
-| EQTransformer teacher (best-F1 @ 0.15) | 376,935 | 0.984 | 0.990 | 0.9867 | 81 | 51 | 62.8±88.4 ms | 78.9±117.5 ms |
+| EQTransformer teacher † (thr 0.50) | 376,935 | 0.993 | 0.979 | 0.9860 | 35 | 103 | 62.8±88.4 ms | 78.9±117.5 ms |
+| EQTransformer teacher † (best-F1 @ 0.15) | 376,935 | 0.984 | 0.990 | 0.9867 | 81 | 51 | 62.8±88.4 ms | 78.9±117.5 ms |
+
+† These two EQTransformer rows are the **handicapped baseline** — teacher fed the
+student's preprocessing at a fixed/test-picked threshold. Its **fair** numbers
+(native preprocessing, validation-selected threshold: F1 0.9994, P/S-MAE
+41.1/73.6 ms) are in **Fairness corrections** below.
 
 **What distillation bought (same 48,051-param model, only better weights):** at
 the config-default threshold 0.50, distillation more than halved noise false
@@ -222,7 +245,10 @@ alarms (**415 → 180**), lifting F1 **0.9597 → 0.9819**, and tightened P pick
 expected to transfer. After the free threshold + min-duration postprocessing, the
 distilled student reaches **F1 0.9944** (45 noise FP, 11 missed events), beating
 both the Stage 1 tuned student (0.9929) and the **7.8×-larger** EQTransformer
-teacher's own best (0.9867). Its low-false-alarm operating point drives noise
+teacher's *handicapped* best (0.9867) — but that teacher number was measured
+under the student's preprocessing and an un-tuned threshold; see **Fairness
+corrections** below, where the teacher reaches F1 0.9994 under its native input.
+Its low-false-alarm operating point drives noise
 false alarms down to **11 / 2,824** (0.4%) while still recovering 98.3% of events.
 Both models' val weighted BCE is ~0.0179 — the headline gains are in the shape of
 the detection/pick streams, not the aggregate loss. Full metrics, SNR-bucket
@@ -231,6 +257,49 @@ breakdown, and residual histograms: `outputs/stage2_eval/` (`test_metrics.json`,
 `threshold_recommendations.json`); Stage 1's equivalents remain in
 `outputs/stage1_eval/`.
 
+### Fairness corrections (validation-selected threshold + native teacher preprocessing)
+
+Two protocol fixes make the student-vs-teacher comparison fair. Both are applied
+in `scripts/fair_comparison.py`; the corrected numbers live in
+`outputs/fair_eval/comparison.json` and drive the regenerated
+`outputs/figures/snr_bucketed_performance.png`.
+
+1. **Threshold selected on validation, not test.** The tables above and the
+   original SNR chart scored detection at a fixed, a-priori threshold (0.50) —
+   and the "max-F1" rows picked the threshold on the *test* split itself. The
+   corrected protocol sweeps the detection threshold on the **validation** split
+   only, fixes each model at its val-max-F1 point (**student 0.89, teacher
+   0.89**), and evaluates the **test** split once at that fixed threshold.
+2. **Each model under its own preprocessing.** The original teacher was fed the
+   *student's* pipeline (demean + bandpass 1–45 Hz + global-std norm).
+   EQTransformer's SeisBench `stead` weights document their own conditioning
+   (demean + per-trace **peak** normalization + 6-sample cosine taper, **no
+   bandpass**); the teacher is now fed that native input via the model's own
+   `annotate_batch_pre`. The student's evaluation is unchanged.
+
+Effect on the overall test-split numbers (detection F1 incl. noise; P/S-pick MAE
+within ±500 ms):
+
+| protocol | student F1 | student P-MAE | student S-MAE | teacher F1 | teacher P-MAE | teacher S-MAE |
+|---|---|---|---|---|---|---|
+| published (fixed thr 0.50; teacher on student pipeline) | 0.9819 | 36.9 ms | 71.4 ms | 0.9860 | 62.8 ms | 78.9 ms |
+| + fix 1 (val-selected thr; teacher still on student pipeline) | **0.9925** | 36.9 ms | 71.4 ms | 0.9863 | 62.8 ms | 78.9 ms |
+| + fix 1 & 2 (val-selected thr; **teacher native** preprocessing) | 0.9925 | **36.9 ms** | **71.4 ms** | **0.9994** | **41.1 ms** | **73.6 ms** |
+
+Fix 1 mainly helps the **student** — its confident detection wants a high
+threshold to shed noise false alarms (F1 0.9819 → 0.9925). Fix 2 mainly helps
+the **teacher** — native input lifts it from F1 0.9863 → **0.9994**, P-MAE
+62.8 → **41.1 ms**, and S-MAE 78.9 → **73.6 ms**.
+
+**Honest revised takeaway.** Under this fair (and teacher-favorable) protocol the
+EQTransformer teacher slightly **leads detection F1** (0.9994 vs 0.9925) and
+closes most of the pick-timing gap, yet the **48,051-param student stays ahead on
+both pick MAEs** (P 36.9 vs 41.1 ms, S 71.4 vs 73.6 ms) at **7.8× fewer
+parameters** and with only INT8-friendly ops. In the regenerated SNR chart the
+teacher leads F1 in every earthquake bucket; because those buckets are
+earthquake-only, per-bucket F1 tracks recall and the student's noise-false-alarm
+advantage shows up only in the overall figure here.
+
 ### Size / cost comparison
 
 | model | params | fp32 size | MFLOPs / 60 s window | throughput (A100, fp32) | ops |
@@ -238,9 +307,11 @@ breakdown, and residual histograms: `outputs/stage2_eval/` (`test_metrics.json`,
 | **SeismicUNet student** (Stage 1 & 2) | **48,051** | **0.19 MB** | **38.1** | ~640 tr/s | Conv1d / BN / ReLU / NN-upsample (INT8-friendly) |
 | EQTransformer teacher | 376,935 | 1.51 MB | — | ~540 tr/s | attention + BiLSTM (not edge-friendly) |
 
-The student is **7.8× smaller** and faster than the teacher, matches or beats it
-on this test set, and — unlike the teacher — uses only quantization-friendly ops,
-so it is the model carried into Phase 5 (ONNX / INT8) deployment.
+The student is **7.8× smaller** and faster than the teacher, stays competitive
+with it on detection and ahead on both P- and S-pick timing under a fair,
+teacher-favorable protocol (see **Fairness corrections**), and — unlike the teacher — uses only
+quantization-friendly ops, so it is the model carried into Phase 5 (ONNX / INT8)
+deployment.
 
 ### Detection threshold + min-duration tuning (postprocessing only)
 
@@ -277,8 +348,9 @@ python scripts/threshold_sweep.py --config configs/default.yaml \
 
 ### Side-by-side vs pretrained EQTransformer (teacher)
 
-This is the **pre-distillation** baseline that motivated Stage 2 — the distilled
-student in the headline table above now surpasses it. `scripts/eqtransformer_baseline.py`
+This is the **pre-distillation, student-pipeline** baseline that motivated Stage 2.
+Its teacher numbers are handicapped (EQT fed the student's preprocessing); the
+**fair** re-scoring is in **Fairness corrections** above. `scripts/eqtransformer_baseline.py`
 runs SeisBench's pretrained EQTransformer (`stead` weights) on the **identical**
 test traces with the **identical** detection/pick tolerances (`eval.*`), so the
 numbers line up. Both models are fed byte-identical inputs — the project pipeline's
@@ -289,23 +361,27 @@ Stage 1 (supervised, pre-distillation) checkpoint at detection threshold **0.50*
 |---|---|---|---|---|---|---|---|---|---|---|
 | **SeismicUNet** (student, default 0.50) | **48,051** | **0.19 MB** | 0.923 | 1.000 | 0.9597 | 415 | 1 | **46.0±77.4 ms** | **72.4±112.3 ms** | ~660 tr/s |
 | SeismicUNet (student, tuned 0.90+500 ms) | 48,051 | 0.19 MB | 0.989 | 0.996 | **0.9929** | 53 | 18 | 46.0±77.4 ms | 72.4±112.3 ms | ~660 tr/s |
-| EQTransformer (`stead`, 0.50) | 376,935 | 1.51 MB | **0.993** | 0.979 | 0.9860 | **35** | 103 | 62.8±88.4 ms | 78.9±117.5 ms | ~540 tr/s |
-| EQTransformer (`stead`, best-F1 @ 0.15) | 376,935 | 1.51 MB | 0.984 | 0.990 | 0.9867 | 81 | 51 | 62.8±88.4 ms | 78.9±117.5 ms | ~540 tr/s |
+| EQTransformer † (`stead`, 0.50) | 376,935 | 1.51 MB | **0.993** | 0.979 | 0.9860 | **35** | 103 | 62.8±88.4 ms | 78.9±117.5 ms | ~540 tr/s |
+| EQTransformer † (`stead`, best-F1 @ 0.15) | 376,935 | 1.51 MB | 0.984 | 0.990 | 0.9867 | 81 | 51 | 62.8±88.4 ms | 78.9±117.5 ms | ~540 tr/s |
 
-Takeaways (on this pipeline / test set): the **7.8×-smaller student is competitive
-with the teacher**. At a matched threshold EQTransformer has far higher raw
-precision (35 vs 415 noise false alarms) but lower recall (misses 103 events vs 1);
-after the free threshold+min-duration postprocessing the student's F1 (0.9929)
-actually edges out EQT's best (0.9867). Pick residuals are *tighter* for the
-student here (P MAE 46 vs 63 ms) — but see the fairness caveats, which make the
-pick comparison **uncharitable to EQT**. Artifacts:
+Takeaways (on this **student-pipeline** baseline / test set): the **7.8×-smaller
+student is competitive with the teacher**. At a matched threshold EQTransformer
+has far higher raw precision (35 vs 415 noise false alarms) but lower recall
+(misses 103 events vs 1). **† The EQT rows here are handicapped** — fed the
+student's preprocessing at a fixed/test-picked threshold. Under its **native**
+preprocessing and a **validation-selected** threshold the teacher reaches F1
+**0.9994** and P/S-MAE **41.1 / 73.6 ms** (see **Fairness corrections**),
+**edging the student on detection F1** while the 48k-param student keeps the
+pick-MAE (P 36.9, S 71.4 ms) and 7.8× size lead. Artifacts:
 `outputs/eqtransformer_baseline/` (`eqt_metrics.json`, `threshold_sweep.csv/png`,
 `pick_residuals.png`, `summary.txt`).
 
 **Fairness caveats — do not over-read these numbers:**
-- **Preprocessing:** EQT is fed the project's bandpass(1–45 Hz)+std-normalized
-  inputs, **not** its native preprocessing. This most likely handicaps EQT's pick
-  sharpness; treat its pick MAE as a lower bound on its true capability.
+- **Preprocessing (now addressed):** the rows in *this* table feed EQT the
+  project's bandpass(1–45 Hz)+std-normalized inputs, **not** its native
+  preprocessing — which handicaps its pick sharpness. The **Fairness corrections**
+  section above re-scores the teacher under its native pipeline (demean +
+  per-trace peak-norm + taper, no bandpass), removing this caveat.
 - **Windowing:** single fixed 60 s windows, no overlap/stacking. EQT's usual
   `classify()` uses overlapping windows + stacking on continuous streams; both
   models here run one window at a time (the student's deployment setting).

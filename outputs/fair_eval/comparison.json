@@ -1,0 +1,169 @@
+{
+  "protocol_note": "threshold selected on val, applied once to test; teacher scored under native SeisBench preprocessing",
+  "val_selected_thresholds": {
+    "student": 0.89,
+    "teacher_studentpipe": 0.47,
+    "teacher_native": 0.89,
+    "student_val_f1": 0.994693680656054,
+    "teacher_studentpipe_val_f1": 0.9878958071075821,
+    "teacher_native_val_f1": 0.999324519926662
+  },
+  "teacher_native_conditioning": "demean + peak-norm + 6-sample cosine taper (no bandpass)",
+  "student_conditioning": "demean + bandpass 1-45 Hz + global-std norm (unchanged)",
+  "protocols": {
+    "A_before": {
+      "desc": "published protocol: fixed 0.5 threshold; teacher on student pipeline",
+      "student": {
+        "threshold": 0.5,
+        "f1": 0.9818650282429887,
+        "precision": 0.9649396182313985,
+        "recall": 0.9993947952390558,
+        "tp": 4954,
+        "fp": 180,
+        "fn": 3,
+        "tn": 2644,
+        "p_mae_ms": 36.94798169477582,
+        "p_mae_n": 4862,
+        "s_mae_ms": 71.4412202855943,
+        "s_mae_n": 4762
+      },
+      "teacher": {
+        "threshold": 0.5,
+        "f1": 0.9859841560024375,
+        "precision": 0.9928410717938229,
+        "recall": 0.9792213032075853,
+        "tp": 4854,
+        "fp": 35,
+        "fn": 103,
+        "tn": 2789,
+        "p_mae_ms": 62.7755146223438,
+        "p_mae_n": 4753,
+        "s_mae_ms": 78.86405916152373,
+        "s_mae_n": 4699
+      }
+    },
+    "B_fix1_only": {
+      "desc": "val-selected threshold; teacher STILL on student pipeline",
+      "student": {
+        "threshold": 0.89,
+        "f1": 0.9925131525698098,
+        "precision": 0.9955348081997158,
+        "recall": 0.9895097841436352,
+        "tp": 4905,
+        "fp": 22,
+        "fn": 52,
+        "tn": 2802,
+        "p_mae_ms": 36.94798169477582,
+        "p_mae_n": 4862,
+        "s_mae_ms": 71.4412202855943,
+        "s_mae_n": 4762
+      },
+      "teacher": {
+        "threshold": 0.47,
+        "f1": 0.9862958075322301,
+        "precision": 0.9926440539436044,
+        "recall": 0.980028242888844,
+        "tp": 4858,
+        "fp": 36,
+        "fn": 99,
+        "tn": 2788,
+        "p_mae_ms": 62.7755146223438,
+        "p_mae_n": 4753,
+        "s_mae_ms": 78.86405916152373,
+        "s_mae_n": 4699
+      }
+    },
+    "C_after": {
+      "desc": "val-selected threshold + teacher NATIVE preprocessing",
+      "student": {
+        "threshold": 0.89,
+        "f1": 0.9925131525698098,
+        "precision": 0.9955348081997158,
+        "recall": 0.9895097841436352,
+        "tp": 4905,
+        "fp": 22,
+        "fn": 52,
+        "tn": 2802,
+        "p_mae_ms": 36.94798169477582,
+        "p_mae_n": 4862,
+        "s_mae_ms": 71.4412202855943,
+        "s_mae_n": 4762
+      },
+      "teacher": {
+        "threshold": 0.89,
+        "f1": 0.9993947952390558,
+        "precision": 0.9993947952390558,
+        "recall": 0.9993947952390558,
+        "tp": 4954,
+        "fp": 3,
+        "fn": 3,
+        "tn": 2821,
+        "p_mae_ms": 41.109380008176615,
+        "p_mae_n": 4892,
+        "s_mae_ms": 73.55792446192054,
+        "s_mae_n": 4832
+      }
+    }
+  },
+  "per_bucket": {
+    "[0,10) dB": {
+      "n": 300,
+      "after": {
+        "student_f1": 0.9619377162629758,
+        "teacher_f1": 0.9966555183946488,
+        "student_p_mae_ms": 45.45323741007195,
+        "teacher_p_mae_ms": 48.55102040816327,
+        "student_s_mae_ms": 100.1439926739927,
+        "teacher_s_mae_ms": 97.5993402777778
+      },
+      "before": {
+        "student_f1": 0.9983305509181971,
+        "teacher_f1": 0.9342806394316163,
+        "student_p_mae_ms": 45.45323741007195,
+        "teacher_p_mae_ms": 92.23293172690764,
+        "student_s_mae_ms": 100.1439926739927,
+        "teacher_s_mae_ms": 96.55899598393574
+      }
+    },
+    "[10,20) dB": {
+      "n": 1349,
+      "after": {
+        "student_f1": 0.9947839046199702,
+        "teacher_f1": 0.99962921764924,
+        "student_p_mae_ms": 41.51838905775077,
+        "teacher_p_mae_ms": 42.71189759036145,
+        "student_s_mae_ms": 76.84321044546851,
+        "teacher_s_mae_ms": 76.07125189681335
+      },
+      "before": {
+        "student_f1": 0.9992581602373887,
+        "teacher_f1": 0.9879969992498124,
+        "student_p_mae_ms": 41.51838905775077,
+        "teacher_p_mae_ms": 72.7050980392157,
+        "student_s_mae_ms": 76.84321044546851,
+        "teacher_s_mae_ms": 84.6631439688716
+      }
+    },
+    "[20,100) dB": {
+      "n": 3306,
+      "after": {
+        "student_f1": 0.9975742874469374,
+        "teacher_f1": 1.0,
+        "student_p_mae_ms": 34.38667697489284,
+        "teacher_p_mae_ms": 39.7495982252142,
+        "student_s_mae_ms": 66.73623893249608,
+        "teacher_s_mae_ms": 70.35743517369727
+      },
+      "before": {
+        "student_f1": 1.0,
+        "teacher_f1": 0.9948312557008209,
+        "student_p_mae_ms": 34.38667697489284,
+        "teacher_p_mae_ms": 56.546954136969326,
+        "student_s_mae_ms": 66.73623893249608,
+        "teacher_s_mae_ms": 75.10208156813152
+      }
+    }
+  },
+  "n_val": 8103,
+  "n_test": 7781
+}
