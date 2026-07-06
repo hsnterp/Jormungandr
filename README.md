@@ -102,6 +102,115 @@ output (3, 6000)
 | MFLOPs / 60 s window | **38.1** |
 | output range | `[0,1]` sigmoid ✅ |
 
+### Design rationale & cost ablations
+
+Every architectural choice traces back to the deployment constraints: **<300k
+parameters, INT8-only ops, real-time single-thread CPU**. The tables below make
+the trade-offs concrete: each variant is instantiated and measured with the same
+parameter/FLOP counters as `inspect_model.py`, plus the analytic receptive field
+(RF) of one bottleneck sample along the encoder path. Reproduce every number
+with:
+
+```bash
+python scripts/ablation_costs.py   # no data or checkpoint needed
+```
+
+> **Scope honesty:** these are *cost-side* ablations — parameters, compute, and
+> receptive field are properties of the architecture and are measured exactly.
+> Accuracy-side ablations (retraining each variant through Stage 1 + Stage 2)
+> were not run; each row would cost a multi-hour GPU run. The accuracy evidence
+> for the shipped operating point is the teacher comparison in
+> [Results](#results).
+
+**Why depthwise-separable blocks?** A regular `Conv1d` costs `k·C_in·C_out`
+weights per layer; a depthwise-separable block factors that into `k·C_in`
+(depthwise) + `C_in·C_out` (pointwise) — at `k=7` roughly a 5–7× reduction at
+these widths. Swapping every DS block for a regular conv of identical shape is
+the single most expensive design change available:
+
+| block type | params | MFLOPs / window | bottleneck RF |
+|---|---:|---:|---:|
+| **depthwise-separable (shipped)** | **48,051** | **38.1** | 13.4 s |
+| regular `Conv1d`, same widths | 295,363 (6.1×) | 212.4 (5.6×) | 13.4 s |
+
+One change nearly exhausts the entire <300k budget and multiplies compute by
+5.6× while adding *zero* receptive field. DS convs are also a known-good INT8
+path (the MobileNet lineage); the depthwise stage's quantization sensitivity is
+handled by per-channel weight quantization in Phase 5b, and the measured INT8
+degradation stayed small (F1 −0.0024).
+
+**Why four encoder levels?** Depth buys receptive field but costs parameters
+and temporal resolution at the bottleneck. The detection stream has to integrate
+context spanning P through coda — many seconds — while the P/S streams need
+sample-level timing, recovered through the skip connections:
+
+| encoder levels | params | MFLOPs / window | bottleneck RF | bottleneck (stride, len) |
+|---|---:|---:|---:|---|
+| 3 (16,32,64) | 18,963 | 26.5 | 6.7 s | ×16, 375 |
+| **4 (16,32,64,96) (shipped)** | **48,051** | **38.1** | **13.4 s** | ×32, 188 |
+| 5 (16,32,64,96,128) | 99,443 | 48.3 | 26.8 s | ×64, 94 |
+
+Three levels cap the bottleneck RF at 6.7 s — shorter than typical
+P-to-coda durations in STEAD's local/regional traces, so the detection stream
+would have to call "event vs noise" without ever seeing a whole event envelope.
+Five levels double the parameter bill (99k) and coarsen the deepest features to
+one sample per 0.64 s for RF the dilated bottleneck already provides more
+cheaply (next paragraph). Four levels is the knee of the curve.
+
+**Why a dilated bottleneck (2, 4)?** Dilation is the cheapest receptive field
+in the network — it changes *neither* the parameter count *nor* the FLOPs, only
+the spacing of the depthwise taps:
+
+| bottleneck | params | MFLOPs / window | bottleneck RF |
+|---|---:|---:|---:|
+| no dilation (1,1) | 48,051 | 38.1 | 5.7 s |
+| **dilations (2,4) (shipped)** | 48,051 | 38.1 | **13.4 s** |
+
+The two dilated blocks take the 4-level encoder from 5.7 s to 13.4 s of context
+for free. This is also the real answer to "why not 5 levels": the fifth level
+would spend ~51k parameters buying context that dilation provides at zero cost.
+
+**Why channels 16→32→64→96?** Two forces shape the ladder. FLOPs scale with
+`channels × sequence-length`, so the early, 1500–3000-sample stages must stay
+narrow; capacity belongs deep, where sequences are short. And the top width
+stops at 96 (not a "clean" 128) to keep the two bottleneck blocks and the first
+decoder stage — which all operate at the widest channel count — inside the
+budget:
+
+| width ladder | params | MFLOPs / window |
+|---|---:|---:|
+| half (8,16,32,48) | 13,531 | 11.6 |
+| **shipped (16,32,64,96)** | **48,051** | **38.1** |
+| uniform 64 (64,64,64,64) | 66,563 | 141.6 |
+| double (32,64,128,192) | 180,067 | 136.2 |
+
+The uniform-64 row is the instructive one: only 1.4× the parameters of the
+shipped ladder but **3.7× the compute**, because 64 channels at 3000-sample
+resolution dominate the MACs. That is why the ladder tapers instead of staying
+flat — parameters live wherever you put them, but FLOPs live at high temporal
+resolution. Doubling the ladder (180k params, 3.6× compute) stays under the
+budget but buys capacity the results suggest isn't the bottleneck: the shipped
+48k student already beats the 377k teacher on both pick MAEs (see
+[Fairness corrections](#fairness-corrections-validation-selected-threshold--native-teacher-preprocessing)).
+Halving it (13.5k) was judged too tight for three dense per-sample output
+streams, though it was not trained to confirm.
+
+**Why kernel size 7?** Under the DS factorization the kernel only appears in
+the depthwise term (`k·C_in`), so kernel size is nearly free in parameters but
+scales the receptive field linearly:
+
+| kernel | params | MFLOPs / window | bottleneck RF |
+|---|---:|---:|---:|
+| k=3 | 45,235 | 33.8 | 4.5 s |
+| k=5 | 46,643 | 36.0 | 8.9 s |
+| **k=7 (shipped)** | **48,051** | **38.1** | **13.4 s** |
+| k=11 | 50,867 | 42.4 | 22.3 s |
+
+k=3 (the image-classification default) leaves only 4.5 s of context — the RF
+problem three encoder levels have, all over again. k=7 reaches the 13.4 s
+target; k=11 adds ~11% compute for headroom nothing in the task formulation
+asks for.
+
 ## Repository layout
 
 ```
@@ -119,6 +228,7 @@ Jormungandr/
 │   └── streaming.py            # overlap merge + event/P/S postprocessing
 ├── scripts/
 │   ├── inspect_model.py        # Phase 2 verification (param count + MFLOPs)
+│   ├── ablation_costs.py       # architecture cost ablations (params/FLOPs/RF per variant)
 │   ├── sanity_check_data.py    # Phase 1 verification (plot traces + labels)
 │   ├── train.py                # Stage-1 training + tiny smoke mode
 │   ├── evaluate.py             # Phase 4: F1 + pick residuals on a split
@@ -167,6 +277,9 @@ use, evaluation, and limitations.
 ```bash
 # Phase 2 — inspect the model (no data needed)
 python scripts/inspect_model.py --config configs/default.yaml
+
+# Architecture cost ablations backing the design-rationale tables (no data needed)
+python scripts/ablation_costs.py
 
 # tests (no dataset needed — pure logic)
 pytest -q
