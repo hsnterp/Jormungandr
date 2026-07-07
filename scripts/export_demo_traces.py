@@ -166,9 +166,10 @@ def main():
                           None if r["p_err"] is None else round(r["p_err"], 0))
                         for k, r in selection])
 
-    # ---- teacher (EQTransformer) on the selected traces only --------------
+    # ---- teacher (EQTransformer) + PhaseNet baseline on selected traces ----
     import seisbench.models as sbm
     teacher = sbm.EQTransformer.from_pretrained("stead").to(device).eval()
+    phasenet = sbm.PhaseNet.from_pretrained("stead").to(device).eval()
 
     def student_streams_timed(i):
         x, _ = ds[i]
@@ -196,6 +197,16 @@ def main():
         s_pick, _ = pick_from_stream(s_str, ev.peak_height, peak_distance)
         return p_pick, s_pick
 
+    def phasenet_picks(raw):
+        # PhaseNet native preprocessing; outputs are P, S, Noise streams.
+        rb = torch.tensor(raw[None], dtype=torch.float32, device=device)
+        with torch.inference_mode():
+            out = phasenet(phasenet.annotate_batch_pre(rb, {}))
+        out = out.cpu().numpy()[0]
+        p_pick, _ = pick_from_stream(out[0], ev.peak_height, peak_distance)
+        s_pick, _ = pick_from_stream(out[1], ev.peak_height, peak_distance)
+        return p_pick, s_pick
+
     def sec(sample):
         if sample is None or not np.isfinite(sample):
             return None
@@ -212,6 +223,7 @@ def main():
         pred, latency_ms = student_streams_timed(i)
         raw = _get_waveform(ds.ds, r["row"], cfg.data.n_channels, n_samples)
         tp_pick, ts_pick = teacher_picks(raw)
+        pn_p_pick, pn_s_pick = phasenet_picks(raw)
 
         m = meta.iloc[r["row"]]
         trace_name = str(m.get("trace_name_original") or "").strip()
@@ -263,6 +275,7 @@ def main():
             "student": {"detection": det, "p": pph, "s": sph},
             "truth": {"p_s": sec(r["gt_p"]), "s_s": sec(r["gt_s"])},
             "teacher": {"p_s": sec(tp_pick), "s_s": sec(ts_pick)},
+            "phasenet": {"p_s": sec(pn_p_pick), "s_s": sec(pn_s_pick)},
             "student_pick": {
                 "p_s": p_pick_s, "s_s": s_pick_s,
                 "p_conf": None if p_conf is None else round(p_conf, 3),
