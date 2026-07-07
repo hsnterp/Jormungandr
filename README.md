@@ -329,6 +329,37 @@ model matches the teacher's detection F1, but both are within a few ms on pick
 precision — the tiny student trades a little S-onset precision for a third of
 PhaseNet's footprint.
 
+### Zero-shot generalization to PNW
+
+To probe out-of-distribution behavior, the STEAD-trained student is run **with no
+fine-tuning** on the [PNW](https://github.com/niyiyu/PNW-ML) benchmark (Pacific
+Northwest Seismic Network) — a different region, network, and instrument mix than
+STEAD. We stream a fixed-seed test subset of **5,000 events (earthquake+explosion)
++ 2,500 noise** directly from the SeisBench remote HDF5 (targeted range reads, so
+no 67 GB download), reorder PNW's ENZ components to the model's ZNE, crop each 150 s
+trace to a 60 s window placing P at STEAD's typical position, and score with the
+**identical** preprocessing, detection rule, and ±500 ms tolerance. Reproduce with
+`python scripts/pnw_zeroshot.py` (figure: `outputs/figures/make_pnw_zeroshot_figure.py`).
+
+![Zero-shot generalization to PNW](outputs/figures/pnw_zeroshot.png)
+
+| metric | STEAD (in-distribution) | PNW (zero-shot) |
+|---|---|---|
+| Detection F1 (deployed thr 0.89) | 0.9925 | 0.9493 |
+| P-pick MAE (within ±500 ms) | 36.9 ms | **37.0 ms** |
+| S-pick MAE (within ±500 ms) | 71.4 ms | 92.5 ms |
+| P hit-rate | 0.981 | 0.894 |
+| S hit-rate | 0.961 | 0.886 |
+
+**P-onset timing transfers almost perfectly** — 37.0 ms zero-shot vs 36.9 ms
+in-distribution — on a network the model has never seen. Detection F1 falls ~4
+points and pick hit-rates ~9 points (the model turns slightly conservative and
+misses more low-SNR onsets), and S-pick scatter widens, but there is no collapse:
+a 48k-param model trained only on STEAD remains a usable detector and a precise
+P-picker on PNW without a single gradient step of adaptation. Full metrics,
+per-SNR breakdown, and residual histograms in
+[`outputs/pnw_zeroshot/`](outputs/pnw_zeroshot/).
+
 ### Size / cost comparison
 
 | model | params | fp32 size | MFLOPs / 60 s window | throughput (A100, fp32) | ops |
