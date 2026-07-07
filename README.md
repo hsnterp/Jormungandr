@@ -119,10 +119,12 @@ python scripts/ablation_costs.py   # no data or checkpoint needed
 
 > **Scope honesty:** these are *cost-side* ablations — parameters, compute, and
 > receptive field are properties of the architecture and are measured exactly.
-> Accuracy-side ablations (retraining each variant through Stage 1 + Stage 2)
-> were not run; each row would cost a multi-hour GPU run. The accuracy evidence
-> for the shipped operating point is the teacher comparison in
-> [Results](#results).
+> Accuracy-side ablations for the *architecture* variants (retraining each
+> regular-conv / depth / width / kernel variant through Stage 1 + Stage 2) were
+> not run; each row would cost a multi-hour GPU run. Accuracy ablations for the
+> *training recipe and quantization* — which reuse checkpoints that already
+> exist — **were** run: see **Ablations — distillation & quantization** in the
+> results section, and the teacher comparison in [Results](#results).
 
 **Why depthwise-separable blocks?** A regular `Conv1d` costs `k·C_in·C_out`
 weights per layer; a depthwise-separable block factors that into `k·C_in`
@@ -515,10 +517,12 @@ made no difference (F1 0.9920, P-MAE 45.7 ms), so the fully-quantized model
 ships. Reproduce: `scripts/quantize_onnx.py`; eval in
 `outputs/stage2_int8_eval`.
 
-> These accuracy ablations are the complement to the *cost-side* axis (params /
-> FLOPs / receptive field per architectural choice), which is deterministic and
-> needs no training. Together they answer both halves of "why this design": what
-> each choice costs, and — here — what the training recipe and quantization buy.
+> These accuracy ablations are the complement to the *cost-side* axis in
+> **Design rationale & cost ablations** above (params / FLOPs / receptive field
+> per architectural choice, reproduced by `scripts/ablation_costs.py`) — that
+> axis is deterministic and needs no training. Together they answer both halves
+> of "why this design": what each choice costs, and — here — what the training
+> recipe and quantization buy.
 
 ### Size / cost comparison
 
