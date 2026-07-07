@@ -360,6 +360,53 @@ P-picker on PNW without a single gradient step of adaptation. Full metrics,
 per-SNR breakdown, and residual histograms in
 [`outputs/pnw_zeroshot/`](outputs/pnw_zeroshot/).
 
+### Ablations — distillation & quantization (accuracy)
+
+These are *accuracy-side* ablations: unlike the architecture cost tables (which
+are deterministic and need no training), each row below is a **separately
+trained or exported checkpoint evaluated on the STEAD test split**, so the
+numbers are real measured accuracy, not estimates.
+
+**Distillation — does the EQTransformer teacher actually help?** The same
+student architecture trained from scratch on the hard labels (Stage 1) vs.
+distilled from the teacher's soft targets (Stage 2), both at the fixed 0.5
+threshold on the identical test split:
+
+| student training | Detection F1 | P-MAE | S-MAE |
+|---|---:|---:|---:|
+| Stage 1 — plain (hard labels only) | 0.9597 | 46.0 ms | 72.4 ms |
+| **Stage 2 — distilled from EQTransformer** | **0.9819** | **36.9 ms** | 71.4 ms |
+
+Distillation is worth it: **+2.2 detection-F1 points and ~9 ms of P-pick timing
+at identical inference cost** (the two checkpoints are the same 48k architecture).
+S-timing is unchanged. This is the empirical justification for the two-stage
+recipe — the teacher's soft targets carry onset-shape information the hard
+Gaussian labels don't. Reproduce: `scripts/train.py` (Stage 1) vs
+`scripts/train_distill.py` (Stage 2); eval in `outputs/stage1_eval` /
+`outputs/stage2_eval`.
+
+**Quantization — what does INT8 cost?** The Stage-2 model exported to ONNX,
+FP32 vs INT8 (per-channel weight quantization), both at the deployment threshold
+0.8:
+
+| export | Detection F1 | P-MAE | S-MAE | model size |
+|---|---:|---:|---:|---:|
+| FP32 ONNX | 0.9944 | 37.0 ms | 71.4 ms | 0.20 MB |
+| **INT8 ONNX (shipped)** | 0.9920 | 45.6 ms | 76.2 ms | **0.10 MB** |
+
+INT8 costs only **−0.0024 detection F1** and ~9 ms of P-timing in exchange for
+integer-only ops and half the on-disk size (0.20 → 0.10 MB) — which is what hits
+the Raspberry-Pi real-time latency budget (see the latency section). Keeping the
+output head in FP32 (`head_fp32`) was tried and
+made no difference (F1 0.9920, P-MAE 45.7 ms), so the fully-quantized model
+ships. Reproduce: `scripts/quantize_onnx.py`; eval in
+`outputs/stage2_int8_eval`.
+
+> These accuracy ablations are the complement to the *cost-side* axis (params /
+> FLOPs / receptive field per architectural choice), which is deterministic and
+> needs no training. Together they answer both halves of "why this design": what
+> each choice costs, and — here — what the training recipe and quantization buy.
+
 ### Size / cost comparison
 
 | model | params | fp32 size | MFLOPs / 60 s window | throughput (A100, fp32) | ops |
