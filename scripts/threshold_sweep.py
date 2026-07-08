@@ -51,6 +51,9 @@ def parse_args():
     p.add_argument("--out", default="outputs/stage1_eval")
     p.add_argument("--batch-size", type=int, default=None)
     p.add_argument("--device", default=None)
+    p.add_argument("--smoke", type=int, default=0, metavar="N",
+                   help="sweep only the first N traces of the split (quick check "
+                        "when the full STEAD split is unavailable)")
     return p.parse_args()
 
 
@@ -100,13 +103,20 @@ def main():
     cat = meta[S.COL_CATEGORY].astype(str)
     is_eq_all = cat.isin(S.EARTHQUAKE_VALUES).to_numpy()
 
+    # Subset(ds, range(N)) preserves order, so rows[offset+b] stays aligned.
+    loader_ds = ds
+    if args.smoke:
+        from torch.utils.data import Subset
+        loader_ds = Subset(ds, list(range(min(args.smoke, len(ds)))))
+        print(f"[smoke] sweeping first {len(loader_ds)} of {len(ds)} traces")
+
     batch_size = args.batch_size or cfg.train.batch_size
     loader = DataLoader(
-        ds, batch_size=batch_size, shuffle=False,
+        loader_ds, batch_size=batch_size, shuffle=False,
         num_workers=cfg.train.num_workers, pin_memory=device.type == "cuda",
     )
 
-    n = len(ds)
+    n = len(loader_ds)
     is_eq = np.zeros(n, dtype=bool)
     # per-trace longest above-threshold run for each threshold
     runs = np.zeros((n, len(thresholds)), dtype=np.int32)

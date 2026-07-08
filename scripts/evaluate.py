@@ -53,6 +53,11 @@ def parse_args():
     parser.add_argument("--out", default="outputs/stage1_eval")
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument(
+        "--smoke", type=int, default=0, metavar="N",
+        help="evaluate only the first N traces of the split (quick check when the "
+             "full STEAD split is unavailable)",
+    )
+    parser.add_argument(
         "--device", default=None, help="override (default: cuda if available, else cpu)"
     )
     return parser.parse_args()
@@ -127,11 +132,18 @@ def main():
 
     datasets, split_indices = build_datasets(cfg)
     ds = datasets[args.split]
-    print(f"evaluating split '{args.split}': {len(ds)} traces")
+    # Subset(ds, range(N)) preserves order, so rows[offset+b] stays aligned with
+    # ds.metadata/ds.rows below; only the loader is truncated, not ds itself.
+    loader_ds = ds
+    if args.smoke:
+        from torch.utils.data import Subset
+        loader_ds = Subset(ds, list(range(min(args.smoke, len(ds)))))
+        print(f"[smoke] evaluating first {len(loader_ds)} of {len(ds)} traces")
+    print(f"evaluating split '{args.split}': {len(loader_ds)} traces")
 
     batch_size = args.batch_size or cfg.train.batch_size
     loader = DataLoader(
-        ds, batch_size=batch_size, shuffle=False,
+        loader_ds, batch_size=batch_size, shuffle=False,
         num_workers=cfg.train.num_workers, pin_memory=device.type == "cuda",
     )
 
@@ -238,7 +250,8 @@ def main():
         "checkpoint_epoch": int(ckpt.get("epoch")),
         "checkpoint_val_loss": float(ckpt.get("best_val_loss")),
         "split": args.split,
-        "n_traces": len(ds),
+        "n_traces": len(records),
+        "smoke": bool(args.smoke),
         "device": str(device),
         "inference_seconds": infer_s,
         "eval_params": {
@@ -316,7 +329,7 @@ def main():
     lines = [
         f"Evaluation of {ckpt_path} (epoch {ckpt.get('epoch')}, "
         f"val loss {ckpt.get('best_val_loss'):.5f}) on split '{args.split}' "
-        f"({len(ds)} traces: {global_summary['n_earthquake']} eq / "
+        f"({len(records)} traces: {global_summary['n_earthquake']} eq / "
         f"{global_summary['n_noise']} noise)",
         f"weighted BCE: {test_loss:.5f} "
         f"[det={stream_loss[0]:.4f} P={stream_loss[1]:.4f} S={stream_loss[2]:.4f}]",

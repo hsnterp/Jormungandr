@@ -237,6 +237,7 @@ Jormungandr/
 │   ├── train.py                # Stage-1 training + tiny smoke mode
 │   ├── evaluate.py             # Phase 4: F1 + pick residuals on a split
 │   ├── threshold_sweep.py      # Phase 4: detection threshold + min-duration sweep
+│   ├── false_alarm_rate.py     # Phase 4: per-window FP → false triggers per hour/day
 │   ├── eqtransformer_baseline.py  # Phase 4: pretrained EQTransformer side-by-side
 │   ├── cache_teacher.py        # Stage 2a: chunked/resumable teacher-output cache
 │   ├── train_distill.py        # Stage 2b: distillation fine-tune (hard+soft blend)
@@ -338,17 +339,46 @@ below is evaluated on the
 with the **identical** detection/pick tolerances (peak height 0.3, match
 tolerance ±500 ms), so every row is directly comparable.
 
+> **A few terms, for a non-seismology reader.**
+> - **P wave** — the *primary* wave; the fastest seismic wave and the first
+>   arrival at a station. "P-pick" = the estimated P-arrival sample.
+> - **S wave** — the *secondary* (shear) wave; slower, arrives after the P, and
+>   usually larger. "S-pick" = the estimated S-arrival sample.
+> - **SNR** — signal-to-noise ratio in decibels (dB); higher = a cleaner, easier
+>   event, lower = a faint event buried in noise.
+> - **F1** — the harmonic mean of precision (fraction of triggers that are real
+>   events) and recall (fraction of real events caught); one number, 0–1, that
+>   balances false alarms against misses.
+>
+> **How to read the pick numbers.** *MAE* (mean absolute error, in ms) is
+> computed **only over picks that land within the ±500 ms match tolerance**
+> (the "hits"), so a gross mis-pick or a missed onset is captured in the
+> **hit-rate** (fraction of true arrivals picked within ±500 ms), **not** in the
+> MAE. Read each MAE together with its hit-rate: MAE is "how tight are the good
+> picks", hit-rate is "how often do we get a good pick at all".
+
 ### Headline comparison (test split)
 
-| model / operating point | params | precision | recall | **F1** | FP (noise) | FN (eq) | P MAE±std | S MAE±std |
-|---|---|---|---|---|---|---|---|---|
-| **Stage 2 distilled — max-F1 (thr 0.80)** | **48,051** | 0.9910 | 0.9978 | **0.9944** | 45 | 11 | **36.9±56.3 ms** | **71.4±109.4 ms** |
-| **Stage 2 distilled — low-false-alarm (thr 0.90 + 500 ms)** | 48,051 | 0.9977 | 0.9831 | 0.9903 | **11** | 84 | 36.9±56.3 ms | 71.4±109.4 ms |
-| Stage 2 distilled — default (thr 0.50) | 48,051 | 0.9649 | 0.9994 | 0.9819 | 180 | 3 | 36.9±56.3 ms | 71.4±109.4 ms |
-| Stage 1 supervised — max-F1 (thr 0.90 + 500 ms) | 48,051 | 0.9894 | 0.9964 | 0.9929 | 53 | 18 | 46.0±77.4 ms | 72.4±112.3 ms |
-| Stage 1 supervised — default (thr 0.50) | 48,051 | 0.9227 | 0.9998 | 0.9597 | 415 | 1 | 46.0±77.4 ms | 72.4±112.3 ms |
-| EQTransformer teacher † (thr 0.50) | 376,935 | 0.993 | 0.979 | 0.9860 | 35 | 103 | 62.8±88.4 ms | 78.9±117.5 ms |
-| EQTransformer teacher † (best-F1 @ 0.15) | 376,935 | 0.984 | 0.990 | 0.9867 | 81 | 51 | 62.8±88.4 ms | 78.9±117.5 ms |
+MAE is over hits (picks within ±500 ms) only; the **hit** column next to each MAE
+is the fraction of true arrivals picked within ±500 ms (see "How to read the pick
+numbers" above).
+
+| model / operating point | params | precision | recall | **F1** | FP (noise) | FN (eq) | P MAE±std | P hit | S MAE±std | S hit |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **Stage 2 distilled — max-F1 (thr 0.80)** | **48,051** | 0.9910 | 0.9978 | **0.9944** | 45 | 11 | **36.9±56.3 ms** | 0.981 | **71.4±109.4 ms** | 0.961 |
+| **Stage 2 distilled — low-false-alarm (thr 0.90 + 500 ms)** | 48,051 | 0.9977 | 0.9831 | 0.9903 | **11** | 84 | 36.9±56.3 ms | 0.981 | 71.4±109.4 ms | 0.961 |
+| Stage 2 distilled — default (thr 0.50) | 48,051 | 0.9649 | 0.9994 | 0.9819 | 180 | 3 | 36.9±56.3 ms | 0.981 | 71.4±109.4 ms | 0.961 |
+| Stage 1 supervised — max-F1 (thr 0.90 + 500 ms) | 48,051 | 0.9894 | 0.9964 | 0.9929 | 53 | 18 | 46.0±77.4 ms | —‡ | 72.4±112.3 ms | —‡ |
+| Stage 1 supervised — default (thr 0.50) | 48,051 | 0.9227 | 0.9998 | 0.9597 | 415 | 1 | 46.0±77.4 ms | —‡ | 72.4±112.3 ms | —‡ |
+| EQTransformer teacher † (thr 0.50) | 376,935 | 0.993 | 0.979 | 0.9860 | 35 | 103 | 62.8±88.4 ms | 0.959 | 78.9±117.5 ms | 0.948 |
+| EQTransformer teacher † (best-F1 @ 0.15) | 376,935 | 0.984 | 0.990 | 0.9867 | 81 | 51 | 62.8±88.4 ms | 0.959 | 78.9±117.5 ms | 0.948 |
+
+‡ Stage-1 hit-rates are not re-tabulated here — the Stage-1 checkpoint is not
+shipped and its `outputs/stage1_eval/` metrics are not committed; rerun
+`scripts/evaluate.py` (which now reports `hit_rate_within_tol`) on a Stage-1
+checkpoint to fill these. Pick-timing MAEs shown are from the committed Stage-1
+history. The pick **hit** columns are threshold-independent (picks come from the
+fixed peak-height 0.3 rule), so both teacher rows share one P/S hit-rate.
 
 † These two EQTransformer rows are the **handicapped baseline** — teacher fed the
 student's preprocessing at a fixed/test-picked threshold. Its **fair** numbers
@@ -374,6 +404,52 @@ breakdown, and residual histograms: `outputs/stage2_eval/` (`test_metrics.json`,
 `threshold_recommendations.json`); Stage 1's equivalents remain in
 `outputs/stage1_eval/`.
 
+### False alarms in continuous operation
+
+The deployment target is an **autonomous, on-device trigger**: the model decides
+locally that an event happened and acts (transmits a detection, fires an
+actuation) with no server, no coincidence check across stations, and no human
+veto. In that setting the number that actually governs the system is **not**
+per-window false positives on a curated noise set — it is **false triggers over
+time**, because every false trigger acts. This subsection converts the per-window
+noise FP rate into that operating figure. Reproduce with
+`python scripts/false_alarm_rate.py` (artifact:
+`outputs/false_alarm/false_alarm_rate.json`).
+
+At the deployed INT8 model's **low-false-alarm operating point (threshold 0.90 +
+500 ms min-duration)** the per-window false-positive rate on curated STEAD noise
+is **11 / 2,824 = 0.39 % per 60 s window**. With the default **30 s streaming
+hop** the model evaluates `3600 / 30 = 120` windows per hour, so:
+
+| operating point | per-window noise FP | false triggers/hour | false triggers/day |
+|---|---|---|---|
+| **low-false-alarm (thr 0.90 + 500 ms)** — deployed | 11 / 2,824 (0.39 %) | **≈ 0.47** | **≈ 11** |
+| INT8 max-F1 (thr 0.80), measured | 29 / 2,824 (1.03 %) | ≈ 1.23 | ≈ 30 |
+| FP32 max-F1 (thr 0.80), measured | 45 / 2,824 (1.59 %) | ≈ 1.91 | ≈ 46 |
+
+So at its deployed low-false-alarm point the trigger fires on quiet ground roughly
+**once every ~2 hours (~11 times/day)** under this (upper-bound) estimate; looser
+operating points cost proportionally more (thr 0.80 ≈ 30/day).
+**This time-based rate — not the per-window FP count — is the metric an
+unsupervised actuator lives on:** a 0.4 % per-window FP looks negligible, but at
+120 windows/hour it is an actuation every couple of hours, which is what a
+downstream power/duty-cycle budget must absorb.
+
+**Assumptions (deliberately explicit).** The estimate is
+`false_triggers/hour ≈ (FP / n_noise) × (3600 / hop_s)` and assumes (1) each
+streaming window behaves like one independent 60 s curated-noise trial; (2)
+windows advance by the 30 s hop (60 s windows overlap 50 %, and the streaming
+path coalesces detections within `event_merge_gap_s`, which can only *merge*
+adjacent false triggers — so this is an **upper** estimate); (3) field noise
+resembles STEAD's curated noise. The low-false-alarm FP count is the reference
+Stage-2 student's measurement; the shipped INT8 model was not separately
+revalidated at thr 0.90 + 500 ms (consistent with the streaming caveat below), so
+the INT8-measured thr 0.80 row brackets the rate from above. As an end-to-end
+path check, `scripts/false_alarm_rate.py --smoke` streams **one hour of synthetic
+noise through the deployed INT8 ONNX model and produces 0 false triggers**; a
+direct measurement on real continuous noise (`--noise-npy`) drops in when a
+continuous STEAD-noise stream is available.
+
 ### Fairness corrections (validation-selected threshold + native teacher preprocessing)
 
 Two protocol fixes make the student-vs-teacher comparison fair. Both are applied
@@ -394,25 +470,46 @@ in `scripts/fair_comparison.py`; the corrected numbers live in
    bandpass**); the teacher is now fed that native input via the model's own
    `annotate_batch_pre`. The student's evaluation is unchanged.
 
-Effect on the overall test-split numbers (detection F1 incl. noise; P/S-pick MAE
-within ±500 ms):
+Effect on the overall test-split numbers — **precision and false positives shown
+alongside F1**, because for an autonomous trigger they matter more than F1 (see
+[False alarms in continuous operation](#false-alarms-in-continuous-operation)).
+Precision = fraction of triggers that are real events; **FP (noise)** is out of
+2,824 noise traces; MAE is over hits (picks within ±500 ms):
 
-| protocol | student F1 | student P-MAE | student S-MAE | teacher F1 | teacher P-MAE | teacher S-MAE |
+| protocol | student precision | student FP | student F1 | teacher precision | teacher FP | teacher F1 |
 |---|---|---|---|---|---|---|
-| published (fixed thr 0.50; teacher on student pipeline) | 0.9819 | 36.9 ms | 71.4 ms | 0.9860 | 62.8 ms | 78.9 ms |
-| + fix 1 (val-selected thr; teacher still on student pipeline) | **0.9925** | 36.9 ms | 71.4 ms | 0.9863 | 62.8 ms | 78.9 ms |
-| + fix 1 & 2 (val-selected thr; **teacher native** preprocessing) | 0.9925 | **36.9 ms** | **71.4 ms** | **0.9994** | **41.1 ms** | **73.6 ms** |
+| published (fixed thr 0.50; teacher on student pipeline) | 0.9649 | 180 | 0.9819 | 0.9928 | 35 | 0.9860 |
+| + fix 1 (val-selected thr; teacher still on student pipeline) | **0.9955** | **22** | **0.9925** | 0.9926 | 36 | 0.9863 |
+| + fix 1 & 2 (val-selected thr; **teacher native** preprocessing) | 0.9955 | 22 | 0.9925 | **0.9994** | **3** | **0.9994** |
+
+**Full side-by-side under the final fair protocol (C: val-selected threshold,
+teacher native preprocessing).** This is the teacher-vs-student comparison the
+reviewer asked for, with precision, recall, false positives and false negatives —
+not just F1 — for both models (student thr 0.89, teacher thr 0.89):
+
+| model | params | precision | recall | F1 | FP (noise /2,824) | FN (eq /4,957) | P-MAE (hit) | S-MAE (hit) |
+|---|---|---|---|---|---|---|---|---|
+| **SeismicUNet student** | **48,051** | 0.9955 | 0.9895 | 0.9925 | **22** | 52 | **36.9 ms** (0.981) | **71.4 ms** (0.961) |
+| EQTransformer teacher | 376,935 | **0.9994** | **0.9994** | **0.9994** | **3** | **3** | 41.1 ms (0.987) | 73.6 ms (0.975) |
+
+The fair-protocol student here is the FP32 PyTorch checkpoint (identical picks to
+the shipped model's FP32 export); the deployed **INT8** model's own precision / FP
+are in the INT8 static-quantization evaluation table under Phase 5 deployment
+below (thr 0.80: precision 0.9941, FP 29 / 2,824).
 
 Fix 1 mainly helps the **student** — its confident detection wants a high
-threshold to shed noise false alarms (F1 0.9819 → 0.9925). Fix 2 mainly helps
-the **teacher** — native input lifts it from F1 0.9863 → **0.9994**, P-MAE
+threshold to shed noise false alarms, precision 0.9649 → **0.9955** and FP
+**180 → 22**, F1 0.9819 → 0.9925. Fix 2 mainly helps the **teacher** — native
+input lifts it from F1 0.9863 → **0.9994** (FP 36 → **3**), P-MAE
 62.8 → **41.1 ms**, and S-MAE 78.9 → **73.6 ms**.
 
 **Honest revised takeaway.** Under this fair (and teacher-favorable) protocol the
-EQTransformer teacher slightly **leads detection F1** (0.9994 vs 0.9925) and
-closes most of the pick-timing gap, yet the **48,051-param student stays ahead on
-both pick MAEs** (P 36.9 vs 41.1 ms, S 71.4 vs 73.6 ms) at **7.8× fewer
-parameters** and with only INT8-friendly ops. In the regenerated SNR chart the
+EQTransformer teacher slightly **leads on detection** — higher F1 (0.9994 vs
+0.9925) and fewer noise false alarms (**3 vs 22** out of 2,824) — and closes most
+of the pick-timing gap, yet the **48,051-param student stays ahead on both pick
+MAEs** (P 36.9 vs 41.1 ms, S 71.4 vs 73.6 ms) at **7.8× fewer parameters** and
+with only INT8-friendly ops. The teacher's raw precision edge is the honest
+counterpoint to the student's size/op advantage. In the regenerated SNR chart the
 teacher leads F1 in every earthquake bucket; because those buckets are
 earthquake-only, per-bucket F1 tracks recall and the student's noise-false-alarm
 advantage shows up only in the overall figure here.
@@ -430,11 +527,22 @@ event-present stream is derived as `1 − Noise` (== P + S). Reproduce with
 
 ![Student vs PhaseNet vs EQTransformer on the STEAD test split](outputs/figures/baseline_comparison.png)
 
-| model | params | detection F1 | P-pick MAE (±500 ms) | S-pick MAE (±500 ms) |
-|---|---|---|---|---|
-| **SeismicUNet student** | **48,051** | 0.9925 | **36.9 ms** | 71.4 ms |
-| PhaseNet baseline | 268,443 | 0.9957 | 47.4 ms | **62.1 ms** |
-| EQTransformer teacher | 376,935 | **0.9994** | 41.1 ms | 73.6 ms |
+Precision and false positives on noise are shown alongside F1 (the metrics that
+matter for an unsupervised trigger), and each pick MAE carries its hit-rate:
+
+| model | params | precision | FP (noise /2,824) | detection F1 | P-MAE (hit) | S-MAE (hit) |
+|---|---|---|---|---|---|---|
+| **SeismicUNet student** | **48,051** | 0.9955 | **22** | 0.9925 | **36.9 ms** (0.981) | 71.4 ms (0.961) |
+| PhaseNet baseline | 268,443 | —§ | —§ | 0.9957 | 47.4 ms (0.916) | **62.1 ms** (—§) |
+| EQTransformer teacher | 376,935 | **0.9994** | **3** | **0.9994** | 41.1 ms (0.987) | 73.6 ms (0.975) |
+
+§ PhaseNet's precision, FP-on-noise and S hit-rate are computed by
+`scripts/phasenet_baseline.py` (which now emits them), but its raw metrics
+(`outputs/phasenet_baseline/pn_metrics.json`) are gitignored and require SeisBench
+plus a cached STEAD test split to regenerate — neither is present in this
+evaluation environment, so those cells are left blank rather than guessed. The
+committed figure (`baseline_comparison.png`) and the F1 / P-MAE / S-MAE / P-hit
+values above are from the original run.
 
 The **48k-param student is competitive with PhaseNet at ~5.6× fewer
 parameters**: it leads on P-pick timing (36.9 vs 47.4 ms) and P hit-rate
@@ -487,10 +595,13 @@ student architecture trained from scratch on the hard labels (Stage 1) vs.
 distilled from the teacher's soft targets (Stage 2), both at the fixed 0.5
 threshold on the identical test split:
 
-| student training | Detection F1 | P-MAE | S-MAE |
+| student training | Detection F1 | P-MAE (hit) | S-MAE (hit) |
 |---|---:|---:|---:|
-| Stage 1 — plain (hard labels only) | 0.9597 | 46.0 ms | 72.4 ms |
-| **Stage 2 — distilled from EQTransformer** | **0.9819** | **36.9 ms** | 71.4 ms |
+| Stage 1 — plain (hard labels only) | 0.9597 | 46.0 ms (—‡) | 72.4 ms (—‡) |
+| **Stage 2 — distilled from EQTransformer** | **0.9819** | **36.9 ms** (0.981) | 71.4 ms (0.961) |
+
+(‡ Stage-1 hit-rates not re-tabulated — see the headline-table note; `evaluate.py`
+now reports `hit_rate_within_tol`. MAE is over hits within ±500 ms only.)
 
 Distillation is worth it: **+2.2 detection-F1 points and ~9 ms of P-pick timing
 at identical inference cost** (the two checkpoints are the same 48k architecture).
@@ -504,10 +615,10 @@ Gaussian labels don't. Reproduce: `scripts/train.py` (Stage 1) vs
 FP32 vs INT8 (per-channel weight quantization), both at the deployment threshold
 0.8:
 
-| export | Detection F1 | P-MAE | S-MAE | model size |
+| export | Detection F1 | P-MAE (hit) | S-MAE (hit) | model size |
 |---|---:|---:|---:|---:|
-| FP32 ONNX | 0.9944 | 37.0 ms | 71.4 ms | 0.20 MB |
-| **INT8 ONNX (shipped)** | 0.9920 | 45.6 ms | 76.2 ms | **0.10 MB** |
+| FP32 ONNX | 0.9944 | 37.0 ms (0.981) | 71.4 ms (0.961) | 0.20 MB |
+| **INT8 ONNX (shipped)** | 0.9920 | 45.6 ms (0.966) | 76.2 ms (0.949) | **0.10 MB** |
 
 INT8 costs only **−0.0024 detection F1** and ~9 ms of P-timing in exchange for
 integer-only ops and half the on-disk size (0.20 → 0.10 MB) — which is what hits
@@ -582,12 +693,15 @@ numbers line up. Both models are fed byte-identical inputs — the project pipel
 demean + bandpass(1–45 Hz) + std normalization. Student figures here are the
 Stage 1 (supervised, pre-distillation) checkpoint at detection threshold **0.50**:
 
-| model | params | fp32 size | P | R | **F1** | FP (noise) | FN (eq) | P MAE±std | S MAE±std | throughput |
+P = precision, R = recall; MAE is over hits (picks within ±500 ms), with the
+hit-rate in parentheses:
+
+| model | params | fp32 size | P | R | **F1** | FP (noise) | FN (eq) | P MAE±std (hit) | S MAE±std (hit) | throughput |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **SeismicUNet** (student, default 0.50) | **48,051** | **0.19 MB** | 0.923 | 1.000 | 0.9597 | 415 | 1 | **46.0±77.4 ms** | **72.4±112.3 ms** | ~660 tr/s |
-| SeismicUNet (student, tuned 0.90+500 ms) | 48,051 | 0.19 MB | 0.989 | 0.996 | **0.9929** | 53 | 18 | 46.0±77.4 ms | 72.4±112.3 ms | ~660 tr/s |
-| EQTransformer † (`stead`, 0.50) | 376,935 | 1.51 MB | **0.993** | 0.979 | 0.9860 | **35** | 103 | 62.8±88.4 ms | 78.9±117.5 ms | ~540 tr/s |
-| EQTransformer † (`stead`, best-F1 @ 0.15) | 376,935 | 1.51 MB | 0.984 | 0.990 | 0.9867 | 81 | 51 | 62.8±88.4 ms | 78.9±117.5 ms | ~540 tr/s |
+| **SeismicUNet** (student, default 0.50) | **48,051** | **0.19 MB** | 0.923 | 1.000 | 0.9597 | 415 | 1 | **46.0±77.4 ms** (—‡) | **72.4±112.3 ms** (—‡) | ~660 tr/s |
+| SeismicUNet (student, tuned 0.90+500 ms) | 48,051 | 0.19 MB | 0.989 | 0.996 | **0.9929** | 53 | 18 | 46.0±77.4 ms (—‡) | 72.4±112.3 ms (—‡) | ~660 tr/s |
+| EQTransformer † (`stead`, 0.50) | 376,935 | 1.51 MB | **0.993** | 0.979 | 0.9860 | **35** | 103 | 62.8±88.4 ms (0.959) | 78.9±117.5 ms (0.948) | ~540 tr/s |
+| EQTransformer † (`stead`, best-F1 @ 0.15) | 376,935 | 1.51 MB | 0.984 | 0.990 | 0.9867 | 81 | 51 | 62.8±88.4 ms (0.959) | 78.9±117.5 ms (0.948) | ~540 tr/s |
 
 Takeaways (on this **student-pipeline** baseline / test set): the **7.8×-smaller
 student is competitive with the teacher**. At a matched threshold EQTransformer
@@ -680,10 +794,10 @@ python scripts/quantize_onnx.py --config configs/default.yaml \
 
 - **Full test split at the Stage 2 threshold (0.80):**
 
-  | model | detection F1 | precision | recall | FP | FN | P MAE | S MAE |
+  | model | detection F1 | precision | recall | FP (noise /2,824) | FN (eq /4,957) | P MAE (hit) | S MAE (hit) |
   |---|---:|---:|---:|---:|---:|---:|---:|
-  | FP32 ONNX | 0.9944 | 0.9910 | 0.9978 | 45 | 11 | 37.0 ms | 71.4 ms |
-  | INT8 ONNX | 0.9920 | 0.9941 | 0.9899 | 29 | 50 | 45.6 ms | 76.2 ms |
+  | FP32 ONNX | 0.9944 | 0.9910 | 0.9978 | 45 | 11 | 37.0 ms (0.981) | 71.4 ms (0.961) |
+  | INT8 ONNX | 0.9920 | 0.9941 | 0.9899 | 29 | 50 | 45.6 ms (0.966) | 76.2 ms (0.949) |
 
 Quantization does not meaningfully hurt this operating point: F1 falls 0.0024,
 P-pick MAE rises 8.7 ms, and S-pick MAE rises 4.8 ms. Reports are saved to

@@ -1,0 +1,67 @@
+{
+  "description": "False triggers per hour/day in continuous operation. This TIME-based rate \u2014 not per-window FP \u2014 is the metric an unsupervised on-device actuator lives on.",
+  "streaming_hop_s": 30.0,
+  "windows_per_hour": 120.0,
+  "assumptions": [
+    "each streaming window ~ one independent 60 s curated-noise trial",
+    "windows/hour = 3600 / hop_s (60 s windows overlap 50% at 30 s hop; coalescing within event_merge_gap_s only lowers the count -> upper bound)",
+    "field noise resembles STEAD's curated noise set"
+  ],
+  "deployed_operating_point": "low-false-alarm (thr 0.90 + 500 ms)",
+  "headline_false_triggers_per_hour": 0.46742209631728043,
+  "headline_false_triggers_per_day": 11.21813031161473,
+  "estimates": [
+    {
+      "name": "low-false-alarm (thr 0.90 + 500 ms)",
+      "threshold": 0.9,
+      "min_duration_ms": 500,
+      "model": "Stage 2 distilled student (reference)",
+      "source": "scripts/threshold_sweep.py low-false-alarm point; deployed operating point (INT8 not separately revalidated here)",
+      "deployed": true,
+      "fp_noise": 11,
+      "n_noise": 2824,
+      "per_window_fp_rate": 0.003895184135977337,
+      "windows_per_hour": 120.0,
+      "false_triggers_per_hour": 0.46742209631728043,
+      "false_triggers_per_day": 11.21813031161473
+    },
+    {
+      "name": "INT8 max-F1 (thr 0.80)",
+      "threshold": 0.8,
+      "min_duration_ms": 0,
+      "model": "shipped INT8 ONNX",
+      "source": "outputs/onnx/quantization_report.json (measured)",
+      "deployed": false,
+      "fp_noise": 29,
+      "n_noise": 2824,
+      "per_window_fp_rate": 0.010269121813031162,
+      "windows_per_hour": 120.0,
+      "false_triggers_per_hour": 1.2322946175637395,
+      "false_triggers_per_day": 29.57507082152975
+    },
+    {
+      "name": "FP32 max-F1 (thr 0.80)",
+      "threshold": 0.8,
+      "min_duration_ms": 0,
+      "model": "FP32 ONNX",
+      "source": "outputs/onnx/quantization_report.json (measured)",
+      "deployed": false,
+      "fp_noise": 45,
+      "n_noise": 2824,
+      "per_window_fp_rate": 0.01593484419263456,
+      "windows_per_hour": 120.0,
+      "false_triggers_per_hour": 1.9121813031161474,
+      "false_triggers_per_day": 45.892351274787536
+    }
+  ],
+  "direct_measurement": {
+    "n_windows": 119,
+    "duration_s": 3600.0,
+    "false_triggers": 0,
+    "false_triggers_per_hour": 0.0,
+    "false_triggers_per_day": 0.0,
+    "source": "synthetic gaussian noise (smoke)",
+    "streaming_threshold": 0.8,
+    "streaming_min_duration_ms": 10
+  }
+}

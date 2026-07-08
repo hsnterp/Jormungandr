@@ -130,17 +130,25 @@ def best_threshold(val_recs, dp_key):
 
 
 def pick_mae_ms(recs, gt_key, pick_key, cfg, subset=None):
-    """Within-tolerance pick MAE (ms) for any phase; threshold-independent."""
+    """Within-tolerance pick MAE (ms) + hit count for any phase; threshold-independent.
+
+    Returns (mae_ms, n_within_tol, n_ground_truth). MAE is over hits ONLY (picks
+    within the ±match_tolerance_s window); gross misses land in the hit-rate
+    (n_within_tol / n_ground_truth), not in the MAE.
+    """
     fs = cfg.data.sampling_rate
     tol_ms = cfg.eval.match_tolerance_s * 1000.0
     rr = recs if subset is None else subset
     res = []
+    n_gt = 0
     for r in rr:
-        if r["is_eq"] and np.isfinite(r[gt_key]) and r[pick_key] is not None:
-            e = (r[pick_key] - r[gt_key]) / fs * 1000.0
-            if abs(e) <= tol_ms:
-                res.append(abs(e))
-    return float(np.mean(res)) if res else None, len(res)
+        if r["is_eq"] and np.isfinite(r[gt_key]):
+            n_gt += 1
+            if r[pick_key] is not None:
+                e = (r[pick_key] - r[gt_key]) / fs * 1000.0
+                if abs(e) <= tol_ms:
+                    res.append(abs(e))
+    return (float(np.mean(res)) if res else None), len(res), n_gt
 
 
 def bucketize(recs, edges):
@@ -159,6 +167,13 @@ def bucketize(recs, edges):
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser(description="Fair student-vs-teacher comparison.")
+    ap.add_argument("--smoke", type=int, default=0, metavar="N",
+                    help="use only the first N val and N test traces (quick check "
+                         "when the full STEAD split is unavailable)")
+    args = ap.parse_args()
+
     cfg = load_config(str(REPO / "configs" / "default.yaml"))
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     edges = list(cfg.eval.snr_buckets)
@@ -175,6 +190,9 @@ def main():
     datasets, _ = build_datasets(cfg)
     val = list(range(len(datasets["val"])))
     test = list(range(len(datasets["test"])))
+    if args.smoke:
+        val, test = val[:args.smoke], test[:args.smoke]
+        print(f"[smoke] reduced to val={len(val)} test={len(test)}")
     print(f"val={len(val)}  test={len(test)}")
     val_recs = eval_split(val, datasets["val"], student, teacher, dev, cfg, "val")
     test_recs = eval_split(test, datasets["test"], student, teacher, dev, cfg, "test")
@@ -188,13 +206,19 @@ def main():
 
     def overall(recs, dp_key, thr, p_key, s_key):
         f = f1_at(recs, dp_key, thr)
-        p_mae, p_n = pick_mae_ms(recs, "gt_p", p_key, cfg)
-        s_mae, s_n = pick_mae_ms(recs, "gt_s", s_key, cfg)
+        p_mae, p_n, p_gt = pick_mae_ms(recs, "gt_p", p_key, cfg)
+        s_mae, s_n, s_gt = pick_mae_ms(recs, "gt_s", s_key, cfg)
+        # every FP is on a noise trace and every FN a missed earthquake, by
+        # construction of f1_at (is_eq gate), so fp==fp_noise and fn==fn_eq.
         return {"threshold": thr, "f1": f["f1"], "precision": f["precision"],
                 "recall": f["recall"], "tp": f["tp"], "fp": f["fp"],
                 "fn": f["fn"], "tn": f["tn"],
+                "fp_noise": f["fp"], "fn_eq": f["fn"],
+                "n_noise": f["fp"] + f["tn"], "n_earthquake": f["tp"] + f["fn"],
                 "p_mae_ms": p_mae, "p_mae_n": p_n,
-                "s_mae_ms": s_mae, "s_mae_n": s_n}
+                "p_hit_rate": (p_n / p_gt if p_gt else None),
+                "s_mae_ms": s_mae, "s_mae_n": s_n,
+                "s_hit_rate": (s_n / s_gt if s_gt else None)}
 
     # ---- three protocols on TEST ------------------------------------------
     protocols = {
@@ -222,15 +246,15 @@ def main():
         rr = tb[b]
         s_f = f1_at(rr, "s_dp", s_thr)["f1"]
         t_f = f1_at(rr, "tn_dp", tn_thr)["f1"]
-        s_pmae, _ = pick_mae_ms(rr, "gt_p", "s_p", cfg)
-        t_pmae, _ = pick_mae_ms(rr, "gt_p", "tn_p", cfg)
-        s_smae, _ = pick_mae_ms(rr, "gt_s", "s_s", cfg)
-        t_smae, _ = pick_mae_ms(rr, "gt_s", "tn_s", cfg)
+        s_pmae, _, _ = pick_mae_ms(rr, "gt_p", "s_p", cfg)
+        t_pmae, _, _ = pick_mae_ms(rr, "gt_p", "tn_p", cfg)
+        s_smae, _, _ = pick_mae_ms(rr, "gt_s", "s_s", cfg)
+        t_smae, _, _ = pick_mae_ms(rr, "gt_s", "tn_s", cfg)
         # also the BEFORE per-bucket for reference
         s_f0 = f1_at(rr, "s_dp", 0.5)["f1"]
         t_f0 = f1_at(rr, "tsp_dp", 0.5)["f1"]
-        t_pmae0, _ = pick_mae_ms(rr, "gt_p", "tsp_p", cfg)
-        t_smae0, _ = pick_mae_ms(rr, "gt_s", "tsp_s", cfg)
+        t_pmae0, _, _ = pick_mae_ms(rr, "gt_p", "tsp_p", cfg)
+        t_smae0, _, _ = pick_mae_ms(rr, "gt_s", "tsp_s", cfg)
         per_bucket[b] = {
             "n": len(rr),
             "after": {"student_f1": s_f, "teacher_f1": t_f,
@@ -263,10 +287,13 @@ def main():
     # console before/after summary
     def line(name, p):
         s, t = p["student"], p["teacher"]
-        print(f"  {name:12s} | student F1 {s['f1']:.4f}@{s['threshold']:.2f} "
-              f"P {s['p_mae_ms']:.1f} S {s['s_mae_ms']:.1f}ms | teacher F1 "
-              f"{t['f1']:.4f}@{t['threshold']:.2f} P {t['p_mae_ms']:.1f} "
-              f"S {t['s_mae_ms']:.1f}ms")
+        print(f"  {name:12s}")
+        for who, d in (("student", s), ("teacher", t)):
+            print(f"    {who:8s} F1 {d['f1']:.4f}@{d['threshold']:.2f} "
+                  f"prec {d['precision']:.4f} rec {d['recall']:.4f} "
+                  f"FP {d['fp_noise']}/{d['n_noise']} FN {d['fn_eq']}/{d['n_earthquake']} | "
+                  f"P {d['p_mae_ms']:.1f}ms (hit {d['p_hit_rate']:.3f}) "
+                  f"S {d['s_mae_ms']:.1f}ms (hit {d['s_hit_rate']:.3f})")
     print("\nOVERALL (test):")
     for k, p in protocols.items():
         line(k, p)
