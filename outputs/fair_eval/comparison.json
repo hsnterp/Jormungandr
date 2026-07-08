@@ -25,7 +25,13 @@
         "p_mae_ms": 36.94798169477582,
         "p_mae_n": 4862,
         "s_mae_ms": 71.4412202855943,
-        "s_mae_n": 4762
+        "s_mae_n": 4762,
+        "fp_noise": 180,
+        "fn_eq": 3,
+        "n_noise": 2824,
+        "n_earthquake": 4957,
+        "p_hit_rate": 0.9808351825701029,
+        "s_hit_rate": 0.9606616905386323
       },
       "teacher": {
         "threshold": 0.5,
@@ -39,7 +45,13 @@
         "p_mae_ms": 62.7755146223438,
         "p_mae_n": 4753,
         "s_mae_ms": 78.86405916152373,
-        "s_mae_n": 4699
+        "s_mae_n": 4699,
+        "fp_noise": 35,
+        "fn_eq": 103,
+        "n_noise": 2824,
+        "n_earthquake": 4957,
+        "p_hit_rate": 0.9588460762557999,
+        "s_hit_rate": 0.9479523905588058
       }
     },
     "B_fix1_only": {
@@ -56,7 +68,13 @@
         "p_mae_ms": 36.94798169477582,
         "p_mae_n": 4862,
         "s_mae_ms": 71.4412202855943,
-        "s_mae_n": 4762
+        "s_mae_n": 4762,
+        "fp_noise": 22,
+        "fn_eq": 52,
+        "n_noise": 2824,
+        "n_earthquake": 4957,
+        "p_hit_rate": 0.9808351825701029,
+        "s_hit_rate": 0.9606616905386323
       },
       "teacher": {
         "threshold": 0.47,
@@ -70,7 +88,13 @@
         "p_mae_ms": 62.7755146223438,
         "p_mae_n": 4753,
         "s_mae_ms": 78.86405916152373,
-        "s_mae_n": 4699
+        "s_mae_n": 4699,
+        "fp_noise": 36,
+        "fn_eq": 99,
+        "n_noise": 2824,
+        "n_earthquake": 4957,
+        "p_hit_rate": 0.9588460762557999,
+        "s_hit_rate": 0.9479523905588058
       }
     },
     "C_after": {
@@ -87,7 +111,13 @@
         "p_mae_ms": 36.94798169477582,
         "p_mae_n": 4862,
         "s_mae_ms": 71.4412202855943,
-        "s_mae_n": 4762
+        "s_mae_n": 4762,
+        "fp_noise": 22,
+        "fn_eq": 52,
+        "n_noise": 2824,
+        "n_earthquake": 4957,
+        "p_hit_rate": 0.9808351825701029,
+        "s_hit_rate": 0.9606616905386323
       },
       "teacher": {
         "threshold": 0.89,
@@ -101,7 +131,13 @@
         "p_mae_ms": 41.109380008176615,
         "p_mae_n": 4892,
         "s_mae_ms": 73.55792446192054,
-        "s_mae_n": 4832
+        "s_mae_n": 4832,
+        "fp_noise": 3,
+        "fn_eq": 3,
+        "n_noise": 2824,
+        "n_earthquake": 4957,
+        "p_hit_rate": 0.986887230179544,
+        "s_hit_rate": 0.9747831349606617
       }
     }
   },
@@ -165,5 +201,6 @@
     }
   },
   "n_val": 8103,
-  "n_test": 7781
+  "n_test": 7781,
+  "derived_fields_note": "student/teacher entries include fp_noise (==fp; all FPs are on noise traces), fn_eq (==fn; missed earthquakes), and P/S hit_rate (n within \u00b1500 ms / n_earthquake). MAE is over hits only."
 }

@@ -153,6 +153,9 @@ def parse_args():
     p.add_argument("--pretrained", default="stead")
     p.add_argument("--out", default=str(REPO / "outputs" / "phasenet_baseline"))
     p.add_argument("--device", default=None)
+    p.add_argument("--smoke", type=int, default=0, metavar="N",
+                   help="use only the first N val and N test traces (quick check "
+                        "when the full STEAD split is unavailable)")
     return p.parse_args()
 
 
@@ -177,6 +180,9 @@ def main():
     datasets, _ = build_datasets(cfg)
     val = list(range(len(datasets["val"])))
     test = list(range(len(datasets["test"])))
+    if args.smoke:
+        val, test = val[:args.smoke], test[:args.smoke]
+        print(f"[smoke] reduced to val={len(val)} test={len(test)}")
     print(f"val={len(val)}  test={len(test)}")
 
     print("collecting val records...")
@@ -256,19 +262,22 @@ def main():
 
     # ---- summary.txt -------------------------------------------------------
     d = selected["detection"]
+    n_noise = len(test_recs) - n_eq
     lines = [
         f"PhaseNet[{args.pretrained}] baseline on split 'test' "
-        f"({len(test_recs)} traces: {n_eq} eq / {len(test_recs) - n_eq} noise)",
+        f"({len(test_recs)} traces: {n_eq} eq / {n_noise} noise)",
         f"params={n_params:,}  fp32 size={param_bytes/1e6:.2f} MB  device={dev}",
         f"native preprocessing (demean + peak norm, no bandpass); "
         f"detection proxy = 1 - Noise stream",
         f"detection @ val-selected thr {thr:.2f}: P={d['precision']:.4f} "
         f"R={d['recall']:.4f} F1={d['f1']:.4f} "
-        f"(TP={d['tp']} FP={d['fp']} FN={d['fn']} TN={d['tn']})",
+        f"FP={d['fp']}/{n_noise} (noise) FN={d['fn']}/{n_eq} (eq) "
+        f"(TP={d['tp']} TN={d['tn']})",
     ]
     d0 = fixed["detection"]
     lines.append(f"detection @ fixed 0.50:        P={d0['precision']:.4f} "
-                 f"R={d0['recall']:.4f} F1={d0['f1']:.4f}")
+                 f"R={d0['recall']:.4f} F1={d0['f1']:.4f} "
+                 f"FP={d0['fp']}/{n_noise} FN={d0['fn']}/{n_eq}")
     for phase in ("p", "s"):
         pk = selected[f"{phase}_picks"]
         rt = pk["residuals_within_tol"]
@@ -276,7 +285,8 @@ def main():
             f"{phase.upper()} picks: {pk['n_picked']}/{pk['n_ground_truth']} picked "
             f"({pk['pick_rate']:.3f}), {pk['n_within_tolerance']} within ±{tol_ms:g} ms "
             f"(hit rate {pk['hit_rate_within_tol']:.3f}); within-tol "
-            f"MAE={rt['mae_ms']:.1f} ms std={rt['std_ms']:.1f} ms")
+            f"MAE={rt['mae_ms']:.1f} ms std={rt['std_ms']:.1f} ms "
+            f"(MAE over hits only)")
     lines.append("NOTE: PhaseNet fed its NATIVE preprocessing (its own best), matching "
                  "the corrected protocol used for the EQTransformer teacher.")
     (out_dir / "summary.txt").write_text("\n".join(lines) + "\n")

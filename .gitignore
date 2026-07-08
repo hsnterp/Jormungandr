@@ -42,6 +42,10 @@ outputs/streaming_demo/*
 !outputs/fair_eval/
 outputs/fair_eval/*
 !outputs/fair_eval/comparison.json
+# Deployment false-alarm-rate (false triggers per hour/day)
+!outputs/false_alarm/
+outputs/false_alarm/*
+!outputs/false_alarm/false_alarm_rate.json
 # Evaluation figures + interactive-demo data
 !outputs/figures/
 outputs/figures/*
