@@ -1,6 +1,10 @@
+import os
+
 import numpy as np
+import torch
 
 from seismic_edge_picker.streaming import (
+    causal_stream_probabilities,
     associate_picks,
     extract_events,
     extract_phase_picks,
@@ -80,3 +84,35 @@ def test_phase_picks_and_event_association():
         ("P", 45, 1),
         ("S", 70, 1),
     ]
+
+
+def test_causal_streaming_matches_fixed_batch_outputs():
+    from seismic_edge_picker.config import load_config
+    from seismic_edge_picker.model import SeismicUNet
+    from seismic_edge_picker.preprocessing import (
+        CausalPreprocessor,
+        preprocess_waveform_causal,
+    )
+
+    cfg = load_config(os.path.join(os.path.dirname(__file__), "..", "configs", "default.yaml"))
+    cfg.model.causal = True
+    rng = np.random.default_rng(123)
+    signal = rng.standard_normal((3, cfg.data.window_samples)).astype(np.float32)
+    model = SeismicUNet(causal=True).eval()
+
+    def predict(batch):
+        with torch.inference_mode():
+            return model(torch.from_numpy(batch)).numpy()
+
+    batch_x = preprocess_waveform_causal(signal, cfg, warmup_samples=100)
+    expected = predict(batch_x[None])[0]
+    streaming = causal_stream_probabilities(
+        signal,
+        predict,
+        CausalPreprocessor(cfg, warmup_samples=100),
+        chunk_samples=500,
+    )
+    assert streaming.probabilities.shape == expected.shape
+    assert np.allclose(streaming.probabilities, expected, atol=1e-6)
+    assert streaming.window_starts[0] == 0
+    assert np.all(streaming.coverage == 1)

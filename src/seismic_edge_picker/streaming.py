@@ -81,6 +81,55 @@ def stream_probabilities(
     return StreamingOutput(probabilities, tuple(starts), coverage)
 
 
+def causal_stream_probabilities(
+    signal: np.ndarray,
+    predictor: Callable[[np.ndarray], np.ndarray],
+    preprocessor,
+    chunk_samples: int = 500,
+) -> StreamingOutput:
+    """Run causal preprocessing + causal model inference chunk by chunk.
+
+    ``predictor`` is called with a fixed-length ``(1, 3, N)`` array each chunk.
+    Samples after the current chunk are filled with the latest real processed
+    sample, never zeros. A causal model cannot read that tail for outputs before
+    the chunk boundary, so the emitted samples are equivalent to a full fixed-
+    length batch pass while representing true onset-to-alarm availability.
+    """
+    x = np.asarray(signal, dtype=np.float32)
+    if x.ndim != 2:
+        raise ValueError(f"signal must have shape (channels, samples), got {x.shape}")
+    if x.shape[0] != 3:
+        raise ValueError(f"expected 3 channels, got {x.shape[0]}")
+    if x.shape[1] < 1:
+        raise ValueError("signal must contain at least one sample")
+    if chunk_samples < 1:
+        raise ValueError("chunk_samples must be positive")
+
+    n = x.shape[1]
+    processed = np.empty_like(x, dtype=np.float32)
+    probabilities = np.empty((3, n), dtype=np.float32)
+    starts = []
+    for start in range(0, n, chunk_samples):
+        end = min(start + chunk_samples, n)
+        starts.append(start)
+        processed[:, start:end] = preprocessor.process(x[:, start:end])
+        model_input = np.empty_like(processed, dtype=np.float32)
+        model_input[:, :end] = processed[:, :end]
+        if end < n:
+            model_input[:, end:] = processed[:, end - 1:end]
+        prediction = np.asarray(predictor(model_input[None, ...]), dtype=np.float32)
+        expected = (1, 3, n)
+        if prediction.shape != expected:
+            raise ValueError(
+                f"predictor returned shape {prediction.shape}, expected {expected}"
+            )
+        if not np.isfinite(prediction).all():
+            raise ValueError("predictor returned non-finite probabilities")
+        probabilities[:, start:end] = prediction[0, :, start:end]
+    coverage = np.ones(n, dtype=np.int32)
+    return StreamingOutput(probabilities, tuple(starts), coverage)
+
+
 def extract_events(
     detection: np.ndarray,
     sampling_rate: float,
