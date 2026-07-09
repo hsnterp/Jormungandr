@@ -1,0 +1,19 @@
+dataset,system,measurement,latency_budget_s,p_recall
+SMOKE,shipped_unet_proxy,"masking proxy, not true streaming",0.5,0.0
+SMOKE,shipped_unet_proxy,"masking proxy, not true streaming",1,0.0
+SMOKE,shipped_unet_proxy,"masking proxy, not true streaming",2,0.0
+SMOKE,shipped_unet_proxy,"masking proxy, not true streaming",5,0.0
+SMOKE,shipped_unet_proxy,"masking proxy, not true streaming",7,0.0
+SMOKE,shipped_unet_proxy,"masking proxy, not true streaming",inf,0.0
+SMOKE,causal_unet,true streaming latency,0.5,0.0
+SMOKE,causal_unet,true streaming latency,1,0.0
+SMOKE,causal_unet,true streaming latency,2,0.0
+SMOKE,causal_unet,true streaming latency,5,0.0
+SMOKE,causal_unet,true streaming latency,7,0.0
+SMOKE,causal_unet,true streaming latency,inf,0.0
+SMOKE,sta_lta,true streaming latency,0.5,1.0
+SMOKE,sta_lta,true streaming latency,1,1.0
+SMOKE,sta_lta,true streaming latency,2,1.0
+SMOKE,sta_lta,true streaming latency,5,1.0
+SMOKE,sta_lta,true streaming latency,7,1.0
+SMOKE,sta_lta,true streaming latency,inf,1.0

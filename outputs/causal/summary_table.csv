@@ -1,0 +1,4 @@
+dataset,system,measurement,precision,recall,f1,mae_conditional_hit_ms,hit_rate,false_triggers_per_hour,median_latency_s,p90_latency_s,phase_classification
+SMOKE,shipped_unet_proxy,"masking proxy, not true streaming",0.0,0.0,0.0,,0.0,0.0,,,P stream only in latency curve
+SMOKE,causal_unet,true streaming latency,0.0,0.0,0.0,,0.0,0.0,,,P stream only in latency curve
+SMOKE,sta_lta,true streaming latency,1.0,1.0,1.0,10.0,1.0,0.0,0.01,0.01,N/A
