@@ -43,6 +43,9 @@ def parse_args():
     p.add_argument("--real-batch", type=int, default=8,
                    help="test-split traces for the real-data parity check (0 to skip)")
     p.add_argument("--tol", type=float, default=1e-4, help="max-abs-error tolerance")
+    p.add_argument("--causal", action="store_true",
+                   help="export a causal SeismicUNet checkpoint")
+    p.add_argument("--lookahead", type=int, default=0)
     return p.parse_args()
 
 
@@ -82,6 +85,9 @@ def main():
     global PARITY_MODEL_PATH
     args = parse_args()
     cfg = load_config(args.config)
+    if args.causal:
+        cfg.model.causal = True
+        cfg.model.lookahead = int(args.lookahead)
     opset = args.opset or cfg.deploy.opset
     n_ch = cfg.data.n_channels
     n_samples = cfg.data.window_samples
@@ -122,6 +128,8 @@ def main():
         "onnx_path": str(out_path),
         "onnx_size_mb": size_mb,
         "opset": int(opset),
+        "causal": bool(getattr(cfg.model, "causal", False)),
+        "lookahead": int(getattr(cfg.model, "lookahead", 0)),
         "onnx_version": onnx.__version__,
         "input_name": INPUT_NAME,
         "output_name": OUTPUT_NAME,

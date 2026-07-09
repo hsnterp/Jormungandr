@@ -13,3 +13,8 @@ Shipped checkpoint: /home/ubuntu/seismic-edge-picker/checkpoints/stage2_distill/
 STA/LTA tuned params: {'sta_s': 0.2, 'lta_s': 3.0, 'on': 2.0}
 
 Artifacts: latency_curve.csv, summary_table.csv, recall_latency.png, run.json.
+
+ONNX/INT8 smoke artifacts:
+- `stage3_causal_smoke.onnx` exported with `--causal`; dummy parity max abs error `2.91e-07`.
+- `stage3_causal_smoke_int8.onnx` produced by `scripts/quantize_onnx.py --causal --smoke` with random calibration; no STEAD/PNW parity/eval was run.
+- `quantization_report.json` is a smoke report only and must be replaced after a real `checkpoints/stage3_causal/best.pt` run.

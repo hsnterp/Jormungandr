@@ -33,4 +33,6 @@ Branch: `feature/causal-model`.
 - The smoke run is plumbing-only, not a scientific result: no STEAD training/evaluation and no PNW OOD evaluation were run.
 - Real STEAD run: `python scripts/causal_latency_curve.py --data --n <N>` after training `checkpoints/stage3_causal/best.pt`.
 - PNW OOD remains held out and should be run through `scripts/pnw_zeroshot.py`; do not train on PNW.
-- ONNX/INT8 export of a real causal checkpoint remains dataset/checkpoint-gated; reuse `scripts/export_onnx.py` and `scripts/quantize_onnx.py` once `checkpoints/stage3_causal/best.pt` exists.
+- Smoke ONNX export completed: `stage3_causal_smoke.onnx`, dummy parity max abs error `2.91e-07`.
+- Smoke INT8 quantization completed: `stage3_causal_smoke_int8.onnx` via `scripts/quantize_onnx.py --causal --smoke`; random calibration only, no STEAD/PNW evaluation.
+- ONNX/INT8 export of a real causal checkpoint remains dataset/checkpoint-gated; rerun `scripts/export_onnx.py --causal` and `scripts/quantize_onnx.py --causal` once `checkpoints/stage3_causal/best.pt` exists.

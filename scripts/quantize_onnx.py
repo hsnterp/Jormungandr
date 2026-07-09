@@ -77,6 +77,11 @@ def parse_args():
     p.add_argument("--eval-batch", type=int, default=32)
     p.add_argument("--tol", type=float, default=1e-4,
                    help="PyTorch/FP32 parity tolerance (reported for reference)")
+    p.add_argument("--causal", action="store_true",
+                   help="quantize a causal SeismicUNet checkpoint/ONNX")
+    p.add_argument("--lookahead", type=int, default=0)
+    p.add_argument("--smoke", action="store_true",
+                   help="no-data path: random calibration + dummy parity, skip STEAD eval")
     return p.parse_args()
 
 
@@ -219,6 +224,9 @@ def fmt_eval(e):
 def main():
     args = parse_args()
     cfg = load_config(args.config)
+    if args.causal:
+        cfg.model.causal = True
+        cfg.model.lookahead = int(args.lookahead)
     calib_n = args.calib_traces or cfg.deploy.quant.calibration_traces
 
     fp32_path = Path(args.fp32_onnx)
@@ -239,14 +247,26 @@ def main():
     )
     quant_api = (quantize_static, quantize_dynamic, QuantType, QuantFormat, CalibrationMethod)
 
-    datasets, _ = build_datasets(cfg)
-    val_ds, test_ds = datasets["val"], datasets["test"]
+    if args.smoke:
+        val_ds = test_ds = None
+    else:
+        datasets, _ = build_datasets(cfg)
+        val_ds, test_ds = datasets["val"], datasets["test"]
 
-    # ---- calibration set from the validation split -------------------------
-    n_calib = min(calib_n, len(val_ds))
-    print(f"building calibration set: {n_calib} val traces")
-    calib_batches = [{INPUT_NAME: val_ds[i][0].numpy()[None].astype(np.float32)}
-                     for i in range(n_calib)]
+    # ---- calibration set from the validation split, or smoke tensors --------
+    if args.smoke:
+        n_calib = min(int(calib_n), 8)
+        rng = np.random.default_rng(123)
+        print(f"[smoke] building random calibration set: {n_calib} traces")
+        calib_batches = [
+            {INPUT_NAME: rng.standard_normal((1, cfg.data.n_channels, cfg.data.window_samples)).astype(np.float32)}
+            for _ in range(n_calib)
+        ]
+    else:
+        n_calib = min(calib_n, len(val_ds))
+        print(f"building calibration set: {n_calib} val traces")
+        calib_batches = [{INPUT_NAME: val_ds[i][0].numpy()[None].astype(np.float32)}
+                         for i in range(n_calib)]
     reader = ListCalibrationReader(calib_batches)
 
     # ---- pre-process the FP32 graph (shape inference + opt) for static quant -
@@ -293,8 +313,9 @@ def main():
     rng = np.random.default_rng(0)
     inputs = {
         "dummy": rng.standard_normal((1, n_ch, n_samp)).astype(np.float32),
-        "real_test_batch": np.stack([test_ds[i][0].numpy() for i in range(8)]).astype(np.float32),
     }
+    if not args.smoke:
+        inputs["real_test_batch"] = np.stack([test_ds[i][0].numpy() for i in range(8)]).astype(np.float32)
     parity = {}
     for name, x in inputs.items():
         with torch.no_grad():
@@ -309,6 +330,46 @@ def main():
         print(f"[{name:16s}] pt/fp32 max={entry['pytorch_vs_fp32_onnx']['max_abs_err']:.2e}  "
               + "  ".join(f"fp32/{vn} max={entry[f'fp32_onnx_vs_int8_{vn}']['max_abs_err']:.2e}"
                          for vn in variants))
+
+    if args.smoke:
+        chosen_name = "head_fp32"
+        chosen = variants[chosen_name]
+        shutil.copyfile(chosen["path"], int8_path)
+        int8_mb = int8_path.stat().st_size / 1e6
+        report = {
+            "checkpoint": str(ckpt_path),
+            "fp32_onnx": str(fp32_path),
+            "int8_onnx": str(int8_path),
+            "causal": bool(getattr(cfg.model, "causal", False)),
+            "lookahead": int(getattr(cfg.model, "lookahead", 0)),
+            "shipped_variant": chosen_name,
+            "smoke": True,
+            "quantization": {
+                "mode": quant_mode,
+                "quant_format": "QDQ" if quant_mode == "static" else "dynamic",
+                "weight_type": "QInt8",
+                "activation_type": "QUInt8" if quant_mode == "static" else "n/a (dynamic)",
+                "per_channel": quant_mode == "static",
+                "calibration_traces": n_calib if quant_mode == "static" else 0,
+                "calibration_split": "random-smoke",
+                "head_node": HEAD_NODE,
+                "note": quant_note or "SMOKE ONLY: random calibration, no STEAD/PNW evaluation",
+                "onnxruntime_version": ort.__version__,
+            },
+            "size": {
+                "fp32_mb": fp32_mb, "int8_mb": int8_mb,
+                "reduction_x": fp32_mb / int8_mb,
+                "reduction_pct": 100 * (1 - int8_mb / fp32_mb),
+                "variants_mb": {k: v["size_mb"] for k, v in variants.items()},
+            },
+            "parity": parity,
+            "evaluation": {"skipped": "SMOKE ONLY: no STEAD/PNW dataset access"},
+        }
+        Path(args.report).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.report).write_text(json.dumps(report, indent=2))
+        print(f"\n[smoke] shipping variant '{chosen_name}' -> {int8_path} ({int8_mb:.3f} MB)")
+        print(f"[smoke] wrote: {args.report}\n       {int8_path}")
+        return
 
     # ---- evaluation: FP32 + both INT8 variants on the test split ------------
     thr = args.threshold
@@ -364,6 +425,9 @@ def main():
         "fp32_onnx": str(fp32_path),
         "int8_onnx": str(int8_path),
         "shipped_variant": chosen_name,
+        "causal": bool(getattr(cfg.model, "causal", False)),
+        "lookahead": int(getattr(cfg.model, "lookahead", 0)),
+        "smoke": False,
         "quantization": {
             "mode": quant_mode,
             "quant_format": "QDQ" if quant_mode == "static" else "dynamic",

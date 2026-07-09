@@ -835,8 +835,11 @@ the primary STEAD fine-tune and reserve PNW for held-out OOD evaluation via
 `outputs/causal/recall_latency.png` with its backing
 `outputs/causal/latency_curve.csv`: shipped non-causal U-Net is plotted via the
 right-context masking proxy, while the causal U-Net and tuned STA/LTA use true
-streaming onset-to-alarm latency. The committed `outputs/causal/` files are
-plumbing-only smoke outputs, not final scientific numbers.
+streaming onset-to-alarm latency. The same directory also includes causal smoke
+ONNX/INT8 artifacts (`stage3_causal_smoke.onnx`,
+`stage3_causal_smoke_int8.onnx`) and parity/quantization reports. The committed
+`outputs/causal/` files are plumbing-only smoke outputs, not final scientific
+numbers.
 
 ## Phase 5 deployment (ONNX / INT8)
 
