@@ -69,6 +69,13 @@ model:
   kernel_size: 7
   bottleneck_dilations: [2, 4]
   out_channels: 3
+  # Causal (streaming) variant knobs. Defaults reproduce the shipped non-causal
+  # model exactly. causal=true -> output[t] depends only on input[<=t+lookahead]
+  # (left-only conv padding + floor-aligned upsample). lookahead is a fixed
+  # streaming delay in samples; 0 = strictly causal (the primary experiment).
+  # Set via `train_distill.py --causal [--lookahead N]`; see tests/test_causal.py.
+  causal: false
+  lookahead: 0
 
 # ----------------------------------------------------------------------------
 # PHASE 3 — training

@@ -27,11 +27,27 @@ import torch.nn.functional as F
 
 class DSConv1d(nn.Module):
     """Depthwise-separable 1D conv: depthwise (k, groups=in) -> pointwise (1x1)
-    -> BN -> ReLU. Optional stride (downsample) and dilation."""
+    -> BN -> ReLU. Optional stride (downsample) and dilation.
 
-    def __init__(self, in_ch, out_ch, k=7, stride=1, dilation=1):
+    When ``causal=True`` the depthwise conv uses left-only padding
+    (``dilation*(k-1)`` on the left, 0 on the right) instead of symmetric
+    padding, so output[t] depends only on input[<=t]. The left pad is chosen so
+    the output length is IDENTICAL to the symmetric-padding case (e.g. stride-2
+    6000->3000), which keeps every parameter shape unchanged -> an acausal
+    checkpoint warm-starts a causal model with strict=True (padding is not a
+    learned parameter). Only Conv1d / BatchNorm1d / ReLU / F.pad ops are used,
+    all INT8-quantization friendly."""
+
+    def __init__(self, in_ch, out_ch, k=7, stride=1, dilation=1, causal=False):
         super().__init__()
-        pad = dilation * (k - 1) // 2
+        self.causal = causal
+        # Symmetric "same" padding for the acausal path; left-only for causal.
+        if causal:
+            self.left_pad = dilation * (k - 1)
+            pad = 0
+        else:
+            self.left_pad = 0
+            pad = dilation * (k - 1) // 2
         self.depthwise = nn.Conv1d(
             in_ch, in_ch, k, stride=stride, padding=pad,
             dilation=dilation, groups=in_ch, bias=False,
@@ -41,6 +57,8 @@ class DSConv1d(nn.Module):
         self.act = nn.ReLU(inplace=True)
 
     def forward(self, x):
+        if self.left_pad:
+            x = F.pad(x, (self.left_pad, 0))
         x = self.depthwise(x)
         x = self.pointwise(x)
         x = self.bn(x)
@@ -56,49 +74,74 @@ class SeismicUNet(nn.Module):
         kernel_size=7,
         bottleneck_dilations=(2, 4),
         out_channels=3,
+        causal=False,
+        lookahead=0,
     ):
         super().__init__()
         k = kernel_size
         c = list(encoder_channels)
         assert len(c) == 4, "expected 4 encoder channel widths"
+        self.causal = causal
+        # Fixed streaming delay (samples): output[t] may use input[<=t+lookahead].
+        # 0 = strictly causal (the primary configuration). Only meaningful when
+        # causal=True. Implemented as a post-hoc left-shift of the causal output.
+        self.lookahead = int(lookahead) if causal else 0
 
-        # Stem: conv k7 s2, 6000 -> 3000
+        # Stem: conv k7 s2, 6000 -> 3000. Causal uses left-only pad (applied in
+        # forward) so the Conv1d weight shape is unchanged vs the acausal model.
+        stem_pad = 0 if causal else (k - 1) // 2
+        self.stem_left_pad = (k - 1) if causal else 0
         self.stem = nn.Sequential(
             nn.Conv1d(in_channels, stem_channels, k, stride=2,
-                      padding=(k - 1) // 2, bias=False),
+                      padding=stem_pad, bias=False),
             nn.BatchNorm1d(stem_channels),
             nn.ReLU(inplace=True),
         )
 
         # Encoder (each downsamples x2 via stride-2 depthwise)
-        self.enc1 = DSConv1d(stem_channels, c[0], k, stride=2)  # ->1500
-        self.enc2 = DSConv1d(c[0], c[1], k, stride=2)           # ->750
-        self.enc3 = DSConv1d(c[1], c[2], k, stride=2)           # ->375
-        self.enc4 = DSConv1d(c[2], c[3], k, stride=2)           # ->188
+        self.enc1 = DSConv1d(stem_channels, c[0], k, stride=2, causal=causal)  # ->1500
+        self.enc2 = DSConv1d(c[0], c[1], k, stride=2, causal=causal)           # ->750
+        self.enc3 = DSConv1d(c[1], c[2], k, stride=2, causal=causal)           # ->375
+        self.enc4 = DSConv1d(c[2], c[3], k, stride=2, causal=causal)           # ->188
 
         # Bottleneck: 2 depthwise-separable blocks, dilations 2 and 4
         self.bottleneck = nn.Sequential(
-            DSConv1d(c[3], c[3], k, dilation=bottleneck_dilations[0]),
-            DSConv1d(c[3], c[3], k, dilation=bottleneck_dilations[1]),
+            DSConv1d(c[3], c[3], k, dilation=bottleneck_dilations[0], causal=causal),
+            DSConv1d(c[3], c[3], k, dilation=bottleneck_dilations[1], causal=causal),
         )
 
         # Decoder: nearest upsample + DS-conv, with encoder skips concatenated.
-        self.dec1 = DSConv1d(c[3] + c[2], c[2], k)  # +enc3
-        self.dec2 = DSConv1d(c[2] + c[1], c[1], k)  # +enc2
-        self.dec3 = DSConv1d(c[1] + c[0], c[0], k)  # +enc1
-        self.dec4 = DSConv1d(c[0] + stem_channels, stem_channels, k)  # +stem
+        self.dec1 = DSConv1d(c[3] + c[2], c[2], k, causal=causal)  # +enc3
+        self.dec2 = DSConv1d(c[2] + c[1], c[1], k, causal=causal)  # +enc2
+        self.dec3 = DSConv1d(c[1] + c[0], c[0], k, causal=causal)  # +enc1
+        self.dec4 = DSConv1d(c[0] + stem_channels, stem_channels, k, causal=causal)  # +stem
 
         # Head: 1x1 conv to out streams + sigmoid (applied in forward)
         self.head = nn.Conv1d(stem_channels, out_channels, 1)
 
-    @staticmethod
-    def _up_cat(x, skip):
-        """Nearest-upsample x to skip's length and concat along channels."""
-        x = F.interpolate(x, size=skip.shape[-1], mode="nearest")
+    def _up_cat(self, x, skip):
+        """Upsample x to skip's length and concat along channels.
+
+        Acausal: nearest (F.interpolate). Causal: floor-aligned upsample where
+        fine index j samples coarse index floor(j*Ls/Lf) <= its own nominal
+        time, so no future coarse sample is ever read (verified by the impulse
+        unit test). Both are INT8-friendly gather/resize ops."""
+        x = self._upsample(x, skip.shape[-1])
         return torch.cat([x, skip], dim=1)
+
+    def _upsample(self, x, size):
+        if not self.causal:
+            return F.interpolate(x, size=size, mode="nearest")
+        src = x.shape[-1]
+        # floor(j * src / size) for each fine index j -> past-only gather.
+        idx = (torch.arange(size, device=x.device) * src) // size
+        idx = idx.clamp_max(src - 1)
+        return x.index_select(-1, idx)
 
     def forward(self, x):
         input_len = x.shape[-1]
+        if self.stem_left_pad:
+            x = F.pad(x, (self.stem_left_pad, 0))
         s0 = self.stem(x)          # 3000
         e1 = self.enc1(s0)         # 1500
         e2 = self.enc2(e1)         # 750
@@ -111,8 +154,12 @@ class SeismicUNet(nn.Module):
         d = self.dec3(self._up_cat(d, e1))   # 1500
         d = self.dec4(self._up_cat(d, s0))   # 3000
 
-        d = F.interpolate(d, size=input_len, mode="nearest")  # 6000
+        d = self._upsample(d, input_len)     # 6000
         out = self.head(d)
+        if self.lookahead > 0:
+            # Fixed streaming delay: output[t] := causal_out[t+L], tail replicated.
+            L = self.lookahead
+            out = F.pad(out[..., L:], (0, L), mode="replicate")
         return torch.sigmoid(out)
 
 
@@ -125,6 +172,9 @@ def build_model(cfg) -> SeismicUNet:
         kernel_size=m.kernel_size,
         bottleneck_dilations=tuple(m.bottleneck_dilations),
         out_channels=m.out_channels,
+        # New (optional) knobs; default false/0 so existing configs are unchanged.
+        causal=bool(getattr(m, "causal", False)),
+        lookahead=int(getattr(m, "lookahead", 0)),
     )
 
 
