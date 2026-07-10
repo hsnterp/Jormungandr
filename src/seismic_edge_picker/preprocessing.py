@@ -141,12 +141,15 @@ def causal_normalize(x: np.ndarray, mode: str = "std", eps: float = 1e-8) -> np.
     x = np.asarray(x, dtype=np.float64)
     c = x.shape[0]
     if mode == "std":
-        s = np.cumsum(x.sum(axis=0))
         q = np.cumsum((x ** 2).sum(axis=0))
         cnt = c * np.arange(1, x.shape[-1] + 1)
-        mean = s / cnt
-        var = np.clip(q / cnt - mean ** 2, 0.0, None)
-        scale = np.sqrt(var)
+        # Running RMS (second moment), NOT the central variance sqrt(E[x^2]-E[x]^2).
+        # The central variance collapses to ~0 over the first few samples (nearly
+        # equal cross-channel values), and dividing by ~eps then emits ~1e8 spikes
+        # that poison downstream BatchNorm running stats (eval-mode collapse to a
+        # constant). RMS floors the scale at the signal energy, equals the std for
+        # the zero-mean (post-demean) stream in steady state, and stays causal.
+        scale = np.sqrt(q / cnt)
     elif mode == "max":
         scale = np.maximum.accumulate(np.abs(x).max(axis=0))
     else:
@@ -242,9 +245,12 @@ class CausalPreprocessor:
                 self._norm_count += col.size
                 self._norm_sum += float(col.sum())
                 self._norm_sumsq += float((col ** 2).sum())
-                mean = self._norm_sum / self._norm_count
-                var = max(self._norm_sumsq / self._norm_count - mean ** 2, 0.0)
-                scale = np.sqrt(var)
+                # Running RMS (second moment), NOT central variance: the latter
+                # collapses to ~0 at cold-start and the 1/eps blowup poisons the
+                # first BatchNorm's running variance (~1e10 -> eval collapse to a
+                # constant). RMS == std for the zero-mean (post-demean) stream in
+                # steady state. See causal_normalize() for the full rationale.
+                scale = np.sqrt(self._norm_sumsq / self._norm_count)
             elif mode == "max":
                 self._norm_absmax = max(self._norm_absmax, float(np.abs(col).max()))
                 scale = self._norm_absmax

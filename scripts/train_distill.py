@@ -74,6 +74,11 @@ def parse_args():
     p.add_argument("--init", default=None,
                    help="student checkpoint to warm-start from (e.g. Stage-1 best.pt)")
     p.add_argument("--epochs", type=int, default=None)
+    p.add_argument("--lr", type=float, default=None,
+                   help="override distill.lr (e.g. 1e-4 for the causal net; the "
+                        "default 5e-4 collapses the causal variant to constant output)")
+    p.add_argument("--from-scratch", action="store_true",
+                   help="skip warm-start; train the causal net from random init")
     p.add_argument("--device", default=None)
     p.add_argument("--data", action="store_true",
                    help="for --causal runs, use cached STEAD + teacher cache; otherwise synthetic smoke only")
@@ -106,6 +111,8 @@ def default_run_name(cfg, args, smoke: bool) -> str:
 
 
 def default_causal_init(args) -> str | None:
+    if getattr(args, "from_scratch", False):
+        return None
     if args.init:
         return args.init
     if args.causal:
@@ -209,8 +216,9 @@ def run_synthetic_smoke(args, cfg, device) -> None:
         load_transferable_state(model, init_path)
     weights = stream_weight_tensor(cfg, device)
     optimizer = build_optimizer(cfg, model)
+    smoke_lr = float(args.lr) if args.lr is not None else cfg.distill.lr
     for g in optimizer.param_groups:
-        g["lr"] = cfg.distill.lr
+        g["lr"] = smoke_lr
     scheduler = build_scheduler(cfg, optimizer, epochs)
 
     checkpoint_dir = Path(cfg.train.checkpoint_dir) / run_name
@@ -351,12 +359,14 @@ def main():
     if init_path:
         load_transferable_state(model, init_path)
     weights = stream_weight_tensor(cfg, device)
+    lr = float(args.lr) if args.lr is not None else dc.lr
     optimizer = build_optimizer(cfg, model)
     # honor the distillation lr instead of Stage-1 lr
     for g in optimizer.param_groups:
-        g["lr"] = dc.lr
+        g["lr"] = lr
     scheduler = build_scheduler(cfg, optimizer, epochs)
-    print(f"student params: {count_parameters(model):,}  distill lr={dc.lr:g}")
+    print(f"student params: {count_parameters(model):,}  distill lr={lr:g}"
+          f"{' (from scratch)' if args.from_scratch else ''}")
 
     checkpoint_dir = Path(cfg.train.checkpoint_dir) / run_name
     log_dir = Path(cfg.train.log_dir) / run_name

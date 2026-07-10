@@ -1,19 +1,19 @@
 dataset,system,measurement,latency_budget_s,p_recall
-SMOKE,shipped_unet_proxy,"masking proxy, not true streaming",0.5,0.0
-SMOKE,shipped_unet_proxy,"masking proxy, not true streaming",1,0.0
-SMOKE,shipped_unet_proxy,"masking proxy, not true streaming",2,0.0
-SMOKE,shipped_unet_proxy,"masking proxy, not true streaming",5,0.0
-SMOKE,shipped_unet_proxy,"masking proxy, not true streaming",7,0.0
-SMOKE,shipped_unet_proxy,"masking proxy, not true streaming",inf,0.0
-SMOKE,causal_unet,true streaming latency,0.5,0.0
-SMOKE,causal_unet,true streaming latency,1,0.0
-SMOKE,causal_unet,true streaming latency,2,0.0
-SMOKE,causal_unet,true streaming latency,5,0.0
-SMOKE,causal_unet,true streaming latency,7,0.0
-SMOKE,causal_unet,true streaming latency,inf,0.0
-SMOKE,sta_lta,true streaming latency,0.5,1.0
-SMOKE,sta_lta,true streaming latency,1,1.0
-SMOKE,sta_lta,true streaming latency,2,1.0
-SMOKE,sta_lta,true streaming latency,5,1.0
-SMOKE,sta_lta,true streaming latency,7,1.0
-SMOKE,sta_lta,true streaming latency,inf,1.0
+STEAD-test,shipped_unet_proxy,"masking proxy, not true streaming",0.5,0.1738095238095238
+STEAD-test,shipped_unet_proxy,"masking proxy, not true streaming",1,0.5095238095238095
+STEAD-test,shipped_unet_proxy,"masking proxy, not true streaming",2,0.6007936507936508
+STEAD-test,shipped_unet_proxy,"masking proxy, not true streaming",5,0.6626984126984127
+STEAD-test,shipped_unet_proxy,"masking proxy, not true streaming",7,0.9746031746031746
+STEAD-test,shipped_unet_proxy,"masking proxy, not true streaming",inf,0.9785714285714285
+STEAD-test,causal_unet,true streaming latency,0.5,0.002380952380952381
+STEAD-test,causal_unet,true streaming latency,1,0.15158730158730158
+STEAD-test,causal_unet,true streaming latency,2,0.3055555555555556
+STEAD-test,causal_unet,true streaming latency,5,0.7888888888888889
+STEAD-test,causal_unet,true streaming latency,7,0.957936507936508
+STEAD-test,causal_unet,true streaming latency,inf,0.9722222222222222
+STEAD-test,sta_lta,true streaming latency,0.5,0.5753968253968254
+STEAD-test,sta_lta,true streaming latency,1,0.7746031746031746
+STEAD-test,sta_lta,true streaming latency,2,0.819047619047619
+STEAD-test,sta_lta,true streaming latency,5,0.8626984126984127
+STEAD-test,sta_lta,true streaming latency,7,0.8833333333333333
+STEAD-test,sta_lta,true streaming latency,inf,0.9484126984126984

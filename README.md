@@ -812,34 +812,106 @@ python scripts/lookahead_ablation.py --smoke             # synthetic; no STEAD n
 
 ### Causal early-firing variant
 
-This branch adds a strictly causal `SeismicUNet(causal=True, lookahead=0)` path
-for the low-latency P-trigger experiment. The causal architecture keeps the same
-state-dict tensor shapes as the shipped non-causal model, so
-`checkpoints/stage2_distill/best.pt` warm-starts the causal run; the smoke run
-loaded 78/78 tensors with no skipped layers. Causal preprocessing is forward-only
-(single-pass bandpass + running normalization) and the streaming path warm-starts
-from real background samples rather than zero-filled buffers.
+A strictly causal `SeismicUNet(causal=True, lookahead=0)` path for the
+low-latency P-trigger experiment: `output[t]` depends only on input `[<=t]`
+(left-only conv padding, floor-aligned upsampling), verified by
+`tests/test_causal.py`. Causal preprocessing is forward-only (single-pass
+bandpass + running normalization). The causal architecture keeps the shipped
+model's tensor shapes, so `checkpoints/stage2_distill/best.pt` warm-starts the
+run (78/78 tensors, none skipped). Primary run = 20 epochs on STEAD reusing the
+existing distillation loss/pipeline; best epoch 19, val 0.0246.
 
-Smoke-safe commands, requiring no STEAD/PNW data:
+Real runs (dataset-gated):
 
 ```bash
-python scripts/train_distill.py --causal --epochs 1 --device cpu
-python scripts/stream_infer.py --input raw.npy --causal \
-    --checkpoint checkpoints/stage3_causal_smoke/best.pt
-python scripts/causal_latency_curve.py
+python scripts/train_distill.py --causal --data                       # primary (strictly causal)
+python scripts/train_distill.py --causal --data --latency-aware \
+    --run-name stage3_causal_latency                                  # optional ablation
+python scripts/causal_latency_curve.py --data --split test --n 2000   # headline curve + table
+python scripts/pnw_zeroshot.py --causal \
+    --checkpoint checkpoints/stage3_causal/best.pt                    # OOD (never train on PNW)
 ```
 
-Real runs are dataset-gated: use `scripts/train_distill.py --causal --data` for
-the primary STEAD fine-tune and reserve PNW for held-out OOD evaluation via
-`scripts/pnw_zeroshot.py` (never train on PNW). The headline artifact is
-`outputs/causal/recall_latency.png` with its backing
-`outputs/causal/latency_curve.csv`: shipped non-causal U-Net is plotted via the
-right-context masking proxy, while the causal U-Net and tuned STA/LTA use true
-streaming onset-to-alarm latency. The same directory also includes causal smoke
-ONNX/INT8 artifacts (`stage3_causal_smoke.onnx`,
-`stage3_causal_smoke_int8.onnx`) and parity/quantization reports. The committed
-`outputs/causal/` files are plumbing-only smoke outputs, not final scientific
-numbers.
+**A preprocessing bug had to be fixed first.** The causal running normalization
+originally divided by the central std `sqrt(E[x^2]-E[x]^2)`, which collapses to
+~0 over the first few samples; dividing by `scale+1e-8` then emitted ~1e8 input
+spikes on ~1.7% of STEAD-train traces. Those poisoned the first BatchNorm's
+running variance (~3e10), so in `eval()` mode the model divided every input by
+~1e5 and collapsed to a **constant output** (0 % streaming recall) while looking
+healthy in `train()` mode. The fix uses the running **RMS** `sqrt(E[x^2])`
+(== std for the zero-mean, post-demean stream in steady state, but cannot
+collapse); it bounds max |x| from 6.5e8 to 48 and leaves the median unchanged
+(15.8 -> 15.3). See `src/seismic_edge_picker/preprocessing.py` and
+`outputs/causal/RUN_LOG.md`.
+
+**Headline result (STEAD-test, 2000 traces).** P-recall achievable within each
+onset-to-alarm latency budget — shipped non-causal U-Net via the right-context
+masking proxy; causal U-Net and tuned STA/LTA via *true* streaming latency
+(`outputs/causal/recall_latency.png`, `latency_curve.csv`):
+
+| latency budget | shipped (proxy) | causal U-Net (streaming) | STA/LTA (streaming) |
+|---|---|---|---|
+| 0.5 s | 0.17 | 0.00 | **0.58** |
+| 1 s | 0.51 | 0.15 | **0.77** |
+| 2 s | 0.60 | 0.31 | **0.82** |
+| 5 s | 0.66 | **0.79** | 0.86 |
+| 7 s | **0.97** | 0.96 | 0.88 |
+| inf | 0.98 | 0.97 | 0.95 |
+
+Detection / timing / false-alarm table (STEAD-test; STA/LTA is a detector, so
+phase-classification cells are N/A):
+
+| system | precision | recall | F1 | MAE\|hit | false-trig/hr | median lat | p90 lat |
+|---|---|---|---|---|---|---|---|
+| **Causal U-Net (pure)** | **0.986** | 0.972 | **0.979** | 54 ms | **3.1** | 3.99 s | 5.99 s |
+| Causal U-Net (latency-aware) | 0.964 | 0.988 | 0.976 | 30 ms | 9.0 | 3.99 s | 5.99 s |
+| STA/LTA (tuned) | 0.923 | 0.948 | 0.936 | 1458 ms | 17.5 | **0.25 s** | 4.33 s |
+
+**Interpretation — an honest negative on latency.** Forcing causality did *not*
+recover low-latency P-recall: the causal model's median onset-to-alarm is
+**~4 s** and its recall at 0.5 s is ≈0. Two independent knobs confirm this is
+intrinsic, not a training artifact: (1) pure causality (the model cannot use
+post-onset context *at train time*) still fires at ~4 s, and (2) an explicit
+latency-aware loss that rewards early P firing **did not move the latency at
+all** (median still 3.99 s) — it only traded precision for recall (0.986->0.964,
+false triggers 3.1->9.0/hr). Causality bounds the *receptive-field direction*,
+not the *decision latency*: at time `onset+4s` the model can still integrate 4 s
+of post-onset energy and choose to withhold its alarm until then. So the
+"wait-for-corroboration" behavior is a real accuracy/latency tradeoff on STEAD,
+not merely a crutch inherited from acausal training.
+
+**What it is good for.** The causal U-Net is an excellent, genuinely-streamable
+*detector*: F1 0.98 (matching the non-causal ceiling), and vs tuned STA/LTA it
+has **~6x fewer false triggers** (3.1 vs 17.5 /hr) and **~27x better onset
+precision** (54 vs 1458 ms MAE). The pure-causal model is preferred over the
+latency-aware one (same latency, higher precision, fewer false alarms). Verdict:
+**deployable as a clean, low-false-alarm detector, but not as a sub-second edge
+trigger** — STA/LTA remains the low-latency incumbent. The honest pitch is
+"cleaner detections, latency comparable to the picker, not a latency win over
+STA/LTA."
+
+**Export.** `outputs/onnx/stage3_causal.onnx` (parity max-abs-err 1.2e-6) and
+INT8 `stage3_causal_int8.onnx` (0.224 -> 0.119 MB, -47 %); FP32 F1 0.992 -> INT8
+0.981 (Δ-0.011), same modest INT8 sensitivity as the shipped model.
+
+**STEAD -> PNW generalization (OOD, zero-shot; never trained on PNW).** Batch
+eval via `scripts/pnw_zeroshot.py` on 3000 PNW traces (2000 events / 1000 noise);
+P placed at the window offset. PNW has no streaming-latency loader, so the OOD
+column reports detection/pick quality, not latency. STEAD F1 is batch detection
+at the deployed threshold for both models:
+
+| model | STEAD F1 | PNW F1 (@0.89) | ΔF1 | PNW P-MAE\|hit | PNW S-pick rate |
+|---|---|---|---|---|---|
+| Shipped non-causal | 0.992 | **0.951** | -0.041 | **37.3 ms** | **0.92** |
+| Causal (pure) | 0.992 | 0.912 | **-0.080** | 89.7 ms | 0.61 |
+
+Both generalize, but the **causal model is clearly more brittle OOD**: about
+double the detection-F1 drop, P-onset MAE that more than doubles (37 -> 90 ms),
+and an S-pick rate that collapses from 0.92 to 0.61. With only one-sided context
+the causal model has less signal to fall back on under a network/region/instrument
+shift. Call out plainly: the STEAD numbers do **not** transfer cleanly to PNW for
+the causal variant. See `outputs/pnw_zeroshot/` (shipped) and
+`outputs/pnw_zeroshot_causal/` (causal).
 
 ## Phase 5 deployment (ONNX / INT8)
 

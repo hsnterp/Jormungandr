@@ -1,4 +1,4 @@
 dataset,system,measurement,precision,recall,f1,mae_conditional_hit_ms,hit_rate,false_triggers_per_hour,median_latency_s,p90_latency_s,phase_classification
-SMOKE,shipped_unet_proxy,"masking proxy, not true streaming",0.0,0.0,0.0,,0.0,0.0,,,P stream only in latency curve
-SMOKE,causal_unet,true streaming latency,0.0,0.0,0.0,,0.0,0.0,,,P stream only in latency curve
-SMOKE,sta_lta,true streaming latency,1.0,1.0,1.0,10.0,1.0,0.0,0.01,0.01,N/A
+STEAD-test,shipped_unet_proxy,"masking proxy, not true streaming",0.0,0.0,0.0,9.975669099756692,0.0,0.24324324324324323,,,P stream only in latency curve
+STEAD-test,causal_unet,true streaming latency,0.9863123993558777,0.9722222222222222,0.9792166266986412,53.861224489795916,0.9722222222222222,3.081081081081081,3.99,5.99,P stream only in latency curve
+STEAD-test,sta_lta,true streaming latency,0.9234930448222566,0.9484126984126984,0.9357870007830854,1457.8493723849372,0.9484126984126984,17.513513513513512,0.25,4.33,N/A
