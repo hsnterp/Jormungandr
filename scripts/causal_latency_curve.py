@@ -37,6 +37,7 @@ from seismic_edge_picker.preprocessing import (  # noqa: E402
 )
 from seismic_edge_picker.streaming import causal_stream_probabilities  # noqa: E402
 from evaluate import prf  # noqa: E402
+from signal_utils import arrival_wave, sta_lta_ratio  # noqa: E402
 
 BUDGETS_S = [0.5, 1.0, 2.0, 5.0, 7.0, float("inf")]
 
@@ -66,12 +67,6 @@ def parse_args():
     p.add_argument("--chunk-samples", type=int, default=1000)
     p.add_argument("--p-threshold", type=float, default=None)
     return p.parse_args()
-
-
-def arrival_wave(n, fs, onset, freq, amp, tau):
-    t = (np.arange(n) - onset) / fs
-    env = np.where(t >= 0, np.exp(-t / tau), 0.0)
-    return amp * env * np.sin(2 * np.pi * freq * t)
 
 
 def synthetic_traces(cfg, n_events, n_noise, seed):
@@ -197,23 +192,6 @@ def eval_causal_model(traces, cfg, model, threshold, chunk_samples):
         elif not tr.is_eq:
             noise_triggers.append(rising_edge_count(stream, threshold))
     return summarize_system("causal_unet", traces, latencies, residual_ms, noise_triggers, fs)
-
-
-def sta_lta_ratio(raw, fs, sta_s, lta_s):
-    energy = np.mean(np.asarray(raw, dtype=np.float64) ** 2, axis=0)
-    nsta = max(1, int(round(sta_s * fs)))
-    nlta = max(nsta + 1, int(round(lta_s * fs)))
-    c = np.r_[0.0, np.cumsum(energy)]
-    sta = np.zeros_like(energy)
-    lta = np.zeros_like(energy)
-    idx = np.arange(energy.size)
-    sta_ok = idx + 1 >= nsta
-    lta_ok = idx + 1 >= nlta
-    sta[sta_ok] = (c[idx[sta_ok] + 1] - c[idx[sta_ok] + 1 - nsta]) / nsta
-    lta[lta_ok] = (c[idx[lta_ok] + 1] - c[idx[lta_ok] + 1 - nlta]) / nlta
-    ratio = sta / (lta + 1e-12)
-    ratio[~lta_ok] = 0.0
-    return ratio.astype(np.float32)
 
 
 def eval_sta_lta_params(traces, cfg, params):

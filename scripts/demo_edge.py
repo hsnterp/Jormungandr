@@ -63,7 +63,7 @@ from seismic_edge_picker.streaming import (  # noqa: E402
     causal_stream_probabilities,
     extract_phase_picks,
 )
-from causal_latency_curve import arrival_wave, sta_lta_ratio  # noqa: E402
+from signal_utils import arrival_wave, sta_lta_ratio  # noqa: E402
 from false_alarm_rate import make_session  # noqa: E402
 
 # --- fixed knobs (documented) -----------------------------------------------

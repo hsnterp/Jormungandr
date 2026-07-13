@@ -1,0 +1,13 @@
+# Lightweight edge/Raspberry Pi runtime for scripts/demo_edge.py.
+# This is the LIVE-INFERENCE path only -- no torch, no seisbench, no training.
+# Install on the Pi with:  pip install -r requirements-edge.txt
+#
+# See scripts/DEMO.md for wiring + I2C setup. The browser demo
+# (export_gating_traces.py / gating_demo.html) is generated on a workstation,
+# not the Pi, so its deps are intentionally omitted here.
+numpy
+scipy
+onnxruntime
+PyYAML
+matplotlib          # bytes_comparison.png / --plot; drop if running fully headless with no charts
+smbus2              # only for --source mpu6050 (live I2C); omit for smoke/replay

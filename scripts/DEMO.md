@@ -16,6 +16,32 @@ Three source modes feed one identical pipeline:
 
 ---
 
+## 🎥 Recorded demo — the browser view (recommended for presenting)
+
+The console + PNG output is fine for a terminal, but for a **recording** use the
+self-contained web view. It replays a real `--source replay` run and animates it
+live in a clean, white page: each real STEAD earthquake streams left→right with
+the **P/S picks landing** as the waves arrive, the **model's detection confidence**
+rising through the event, the **STA/LTA lane** underneath, and the **bytes-on-the-
+wire bars growing** as each gate fires — ending on the noise trace where the model
+stays silent.
+
+```bash
+# one time (re-scores the real STEAD replay bundle through the causal pipeline):
+python3 scripts/export_gating_traces.py
+# then just open it — no server, no dependencies, works over file://:
+open outputs/demo/gating_demo.html
+```
+
+`export_gating_traces.py` reuses `demo_edge.py`'s pipeline verbatim, so the byte
+numbers match a `--source replay` run. It writes two files into `outputs/demo/`:
+`gating_traces.json` (the data) and `gating_demo.html` (the data inlined — a single
+shareable file). The page's `1× / 2× / 4× / 8×` buttons control playback speed;
+`8×` runs the whole ~5-minute session in ~40 s. Source template:
+`scripts/gating_demo_template.html`.
+
+---
+
 ## ⚠️ Hardware honesty (read before recording)
 
 The MPU6050 is a **±2 g MEMS accelerometer** (~400 µg/√Hz), roughly **10⁶× less
@@ -59,6 +85,14 @@ The reader configures ±2 g (`AFS_SEL=0`) and an on-chip **100 Hz** output rate
 calibration): `az→Z, ax→N, ay→E`.
 
 ## Install
+
+On a Raspberry Pi (live-inference only — **no torch/seisbench needed**):
+
+```bash
+pip install -r requirements-edge.txt   # numpy scipy onnxruntime pyyaml matplotlib smbus2
+```
+
+Or by hand:
 
 ```bash
 pip install onnxruntime numpy scipy matplotlib pyyaml
