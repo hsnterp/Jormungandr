@@ -54,6 +54,18 @@ outputs/figures/*
 !outputs/figures/*.md
 !outputs/figures/*.txt
 !outputs/figures/demo_traces.json
+# Live MPU6050 / replay edge demo (scripts/demo_edge.py) — commit the real causal
+# INT8 model, the STEAD replay bundle, and sample session outputs. Mirrors the
+# !outputs/onnx/stage2_distill_int8.onnx exception so the .onnx is not caught by
+# the global *.onnx ignore above.
+!outputs/demo/
+outputs/demo/*
+!outputs/demo/causal_stage3_int8.onnx
+!outputs/demo/causal_stage3_quant_report.json
+!outputs/demo/replay_traces.npz
+!outputs/demo/bytes_report.json
+!outputs/demo/bytes_comparison.png
+!outputs/demo/plot_preview.png
 
 # Python
 __pycache__/

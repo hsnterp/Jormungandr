@@ -1,0 +1,96 @@
+{
+  "source": "replay (replay_traces.npz, REAL STEAD)",
+  "bytes_per_sample": 2,
+  "packet_clip_s": 10.0,
+  "gates": {
+    "model_detection_threshold": 0.8,
+    "stalta": {
+      "sta_s": 1.0,
+      "lta_s": 5.0,
+      "on": 3.0
+    }
+  },
+  "elapsed_seconds": 300.0,
+  "bytes": {
+    "raw_continuous": 180000,
+    "stalta_gated": 21485,
+    "model_gated": 8746
+  },
+  "transmissions": {
+    "stalta": {
+      "count": 6,
+      "false": 0
+    },
+    "model": {
+      "count": 4,
+      "false": 0
+    }
+  },
+  "reduction_vs_raw": {
+    "stalta": 8.4,
+    "model": 20.6
+  },
+  "model_vs_stalta_bytes_x": 2.5,
+  "transmission_log": [
+    {
+      "gate": "stalta",
+      "t_s": 5.5,
+      "bytes": 3519,
+      "false": false
+    },
+    {
+      "gate": "model",
+      "t_s": 6.5,
+      "bytes": 3317,
+      "false": false
+    },
+    {
+      "gate": "stalta",
+      "t_s": 18.5,
+      "bytes": 6016,
+      "false": false
+    },
+    {
+      "gate": "model",
+      "t_s": 4.5,
+      "bytes": 1439,
+      "false": false
+    },
+    {
+      "gate": "stalta",
+      "t_s": 5.0,
+      "bytes": 1778,
+      "false": false
+    },
+    {
+      "gate": "stalta",
+      "t_s": 17.0,
+      "bytes": 5859,
+      "false": false
+    },
+    {
+      "gate": "stalta",
+      "t_s": 6.5,
+      "bytes": 2195,
+      "false": false
+    },
+    {
+      "gate": "model",
+      "t_s": 6.5,
+      "bytes": 2195,
+      "false": false
+    },
+    {
+      "gate": "model",
+      "t_s": 4.5,
+      "bytes": 1795,
+      "false": false
+    },
+    {
+      "gate": "stalta",
+      "t_s": 5.0,
+      "bytes": 2118,
+      "false": false
+    }
+  ]
+}
