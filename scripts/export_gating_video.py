@@ -3,10 +3,12 @@
 
 No axes, no titles, no byte counters -- three scrolling signal lanes:
 
-    top     the real STEAD waveform being fed into both detectors, labeled
-            with the dataset's own trace id, plus dashed P/S lines at the
-            catalog arrival times (a small dot marks where the model itself
-            placed each pick)
+    top     the real STEAD waveform being fed into both detectors, labeled with
+            its real-world location and date (top left) and a minimal per-
+            event results column (top right: how long after the true P arrival
+            each gate first genuinely fired, or FALSE/-- for a false/no fire),
+            plus dashed P/S lines at the catalog arrival times (a small dot
+            marks where the model itself placed each pick)
     middle  STA/LTA ratio, with its fixed trigger line
     bottom  our model's detection probability, with its fixed trigger line
 
@@ -79,7 +81,7 @@ def lane_pixels(values, t_src, t_query, vmax):
 
 def fire_alpha(fires, gate, t_query):
     alpha = np.zeros_like(t_query)
-    for t_fire, g in fires:
+    for t_fire, g, _false in fires:
         if g != gate:
             continue
         d = t_query - t_fire
@@ -87,6 +89,31 @@ def fire_alpha(fires, gate, t_query):
         a[d < 0] = 0.0
         alpha = np.maximum(alpha, a)
     return alpha
+
+
+def gate_result(fires, gate, catalog_p):
+    """One minimal value per gate for the results column: how long after the
+    real P arrival it first genuinely fired, or FALSE/-- for a false/no fire."""
+    real = [t for t, g, false in fires if g == gate and not false]
+    false_fire = any(g == gate and false for _, g, false in fires)
+    if real:
+        if catalog_p is None:
+            return f"{min(real):.1f}s"
+        return f"{min(real) - catalog_p:+.1f}s"
+    if false_fire:
+        return "FALSE"
+    return "--"
+
+
+def draw_results_column(canvas, width, y0, stalta_val, model_val):
+    line1 = f"STA/LTA  {stalta_val}"
+    line2 = f"MODEL    {model_val}"
+    (w1, _), _ = cv2.getTextSize(line1, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+    (w2, _), _ = cv2.getTextSize(line2, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+    cv2.putText(canvas, line1, (width - 14 - w1, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                tuple(float(c) for c in TINT_STALTA), 1, cv2.LINE_AA)
+    cv2.putText(canvas, line2, (width - 14 - w2, y0 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                MODEL_PICK, 1, cv2.LINE_AA)
 
 
 def draw_wave_lane(canvas, y0, y1, x, values, label, subtitle=""):
@@ -98,6 +125,9 @@ def draw_wave_lane(canvas, y0, y1, x, values, label, subtitle=""):
     cv2.putText(canvas, label, (14, y0 + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                 LABEL, 1, cv2.LINE_AA)
     if subtitle:
+        # cv2's Hershey fonts only render ASCII -- swap in a plain hyphen for
+        # any fancier dash so it doesn't come out as "???".
+        subtitle = subtitle.replace("—", "-").replace("–", "-")
         (lw, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
         cv2.putText(canvas, subtitle, (14 + lw + 16, y0 + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                     SUBLABEL, 1, cv2.LINE_AA)
@@ -145,12 +175,18 @@ def render_trace(writer, tr, meta, width, height, fps, speed):
     wave = np.asarray(tr["wave"][0], dtype=np.float64)  # single channel, already ~[-1, 1]
     ratio = np.asarray(tr["ratio"], dtype=np.float64)
     det = np.asarray(tr["det"], dtype=np.float64)
-    fires = [(f["t"], f["gate"]) for f in tr["fires"]]
+    fires = [(f["t"], f["gate"], f["false"]) for f in tr["fires"]]
     catalog_p, catalog_s = tr["catalog"]["p"], tr["catalog"]["s"]
     model_p, model_s = tr["model"]["p"], tr["model"]["s"]
 
     stalta_on = meta["stalta_on"]
     det_thresh = meta["det_threshold"]
+
+    label = tr.get("label", tr["id"])
+    if tr.get("date"):
+        label = f"{label} | {tr['date']}"
+    stalta_result = gate_result(fires, "stalta", catalog_p)
+    model_result = gate_result(fires, "model", catalog_p)
 
     x = np.arange(width, dtype=np.float64)
     n_local_frames = int((tr["n_seconds"] + TAIL_S) / speed * fps)
@@ -168,7 +204,8 @@ def render_trace(writer, tr, meta, width, height, fps, speed):
         cv2.line(canvas, (0, 2 * h3), (width, 2 * h3), tuple(float(c) for c in DIVIDER), 1, cv2.LINE_AA)
 
         wave_vals = np.interp(t_query, t, wave, left=0.0, right=0.0)
-        draw_wave_lane(canvas, pad, h3 - pad, x, wave_vals, "STEAD DATA", tr["id"])
+        draw_wave_lane(canvas, pad, h3 - pad, x, wave_vals, "STEAD DATA", label)
+        draw_results_column(canvas, width, pad + 16, stalta_result, model_result)
 
         top_vals = lane_pixels(ratio, t, t_query, vmax=10.0)
         top_alpha = fire_alpha(fires, "stalta", t_query)

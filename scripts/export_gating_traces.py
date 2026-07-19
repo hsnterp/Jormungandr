@@ -60,6 +60,38 @@ def _round(xs, n):
     return [round(v, n) for v in xs]
 
 
+# Manual context for traces that carry no STEAD source metadata (noise has no
+# lat/lon/magnitude -- these are recording-site notes, not derived from data).
+NOISE_LABELS = {
+    "MOOW.IW_20180115033742_NO": "Construction Site",
+}
+
+
+def _rough_location(lat, lon):
+    """Coarse, human-readable region for a real STEAD source lat/lon. Not a
+    geocoder -- just enough bucketing to label the handful of regions STEAD's
+    curated test events actually come from."""
+    if lat is None or lon is None or not (np.isfinite(lat) and np.isfinite(lon)):
+        return None
+    if -56 <= lat <= -17 and -76 <= lon <= -66:
+        if lat < -33:
+            return "Southern Chile"
+        if lat < -27:
+            return "Central Chile"
+        return "Northern Chile"
+    if 32 <= lat <= 42 and -125 <= lon <= -114:
+        return "Central California" if lat >= 35.5 else "Southern California"
+    if 42 <= lat <= 49 and -125 <= lon <= -116:
+        return "Pacific Northwest"
+    return f"{abs(lat):.1f}°{'N' if lat >= 0 else 'S'}, {abs(lon):.1f}°{'E' if lon >= 0 else 'W'}"
+
+
+def _trace_label(trace_id, eq, lat, lon):
+    if not eq:
+        return f"{NOISE_LABELS.get(trace_id, 'Ambient Site')} — Noise"
+    return f"{_rough_location(lat, lon) or 'Unknown Location'} — Earthquake"
+
+
 def build_bundle(cfg, bundle, predict, fs, bins=1100):
     hop = int(round(D.HOP_S * fs))
     clip_n = int((D.CLIP_PRE_S + D.CLIP_POST_S) * fs)
@@ -70,6 +102,9 @@ def build_bundle(cfg, bundle, predict, fs, bins=1100):
     s_samp = bundle["s_sample"]
     raws = bundle["raw"]
     n_trace = raws.shape[0]
+    lat_arr = bundle["source_latitude_deg"] if "source_latitude_deg" in bundle.files else None
+    lon_arr = bundle["source_longitude_deg"] if "source_longitude_deg" in bundle.files else None
+    time_arr = bundle["source_origin_time"] if "source_origin_time" in bundle.files else None
 
     traces = []
     # continuous session counters (Act 2) -- reproduces demo_edge.build_report,
@@ -125,8 +160,17 @@ def build_bundle(cfg, bundle, predict, fs, bins=1100):
         gmax = float(np.abs(raw).max()) or 1.0
         wave = [_round(_decimate_peak(raw[ch] / gmax, edges), 3) for ch in range(3)]
 
+        lat = float(lat_arr[ti]) if lat_arr is not None else None
+        lon = float(lon_arr[ti]) if lon_arr is not None else None
+        date = None
+        if time_arr is not None:
+            raw_time = str(time_arr[ti])
+            if raw_time and raw_time not in ("NaT", "nan", ""):
+                date = raw_time[:10]
         traces.append({
             "id": str(ids[ti]),
+            "label": _trace_label(str(ids[ti]), eq, lat, lon),
+            "date": date,
             "is_eq": eq,
             "n_seconds": round(n / fs, 2),
             "t": _round(centers.tolist(), 3),
