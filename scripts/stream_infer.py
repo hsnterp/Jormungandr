@@ -34,8 +34,12 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from seismic_edge_picker.config import load_config  # noqa: E402
-from seismic_edge_picker.preprocessing import preprocess_waveform  # noqa: E402
+from seismic_edge_picker.preprocessing import (  # noqa: E402
+    CausalPreprocessor,
+    preprocess_waveform,
+)
 from seismic_edge_picker.streaming import (  # noqa: E402
+    causal_stream_probabilities,
     associate_picks,
     extract_events,
     extract_phase_picks,
@@ -54,6 +58,12 @@ def parse_args():
     )
     p.add_argument("--config", default="configs/default.yaml")
     p.add_argument("--model", default="outputs/onnx/stage2_distill_int8.onnx")
+    p.add_argument("--causal", action="store_true",
+                   help="run a torch causal checkpoint with causal preprocessing")
+    p.add_argument("--checkpoint", default=None,
+                   help="torch checkpoint for --causal (default: stage3 causal, then smoke)")
+    p.add_argument("--chunk-samples", type=int, default=500,
+                   help="raw samples per causal streaming step (default: 500)")
     p.add_argument("--out-dir", default="outputs/streaming_demo")
     p.add_argument(
         "--input-preprocessed", action="store_true",
@@ -290,39 +300,81 @@ def main():
     if threads < 1 or args.batch_size < 1:
         raise SystemExit("--threads and --batch-size must be >= 1")
 
-    model_path = Path(args.model)
-    if not model_path.is_file():
-        raise SystemExit(f"ONNX model not found: {model_path}")
-
     if args.input:
         signal = load_npy(args.input)
         sources = [{"mode": "npy", "path": str(Path(args.input))}]
         preprocessed = bool(args.input_preprocessed)
         input_description = str(Path(args.input))
     else:
+        if args.causal:
+            raise SystemExit("--causal currently requires raw --input .npy")
         signal, sources = load_demo(cfg, args.demo_traces)
         preprocessed = True
         input_description = f"{len(sources)} concatenated test traces"
 
-    session, input_name, output_name, ort_version = make_session(model_path, threads)
+    if args.causal:
+        if preprocessed:
+            raise SystemExit("--causal expects raw input; do not pass --input-preprocessed")
+        if args.chunk_samples < 1:
+            raise SystemExit("--chunk-samples must be >= 1")
+        import torch
+        from seismic_edge_picker.model import build_model
 
-    def predict(batch):
-        model_input = batch
-        if not preprocessed:
-            model_input = np.stack(
-                [preprocess_waveform(window, cfg) for window in batch]
-            ).astype(np.float32)
-        return session.run([output_name], {input_name: model_input})[0]
+        cfg.model.causal = True
+        cfg.model.lookahead = 0
+        candidates = [
+            Path(args.checkpoint) if args.checkpoint else None,
+            Path("checkpoints/stage3_causal/best.pt"),
+            Path("checkpoints/stage3_causal_smoke/best.pt"),
+        ]
+        ckpt_path = next((path for path in candidates if path and path.is_file()), None)
+        if ckpt_path is None:
+            raise SystemExit("causal checkpoint not found; pass --checkpoint")
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+        model = build_model(cfg).eval()
+        model.load_state_dict(ckpt["model_state_dict"], strict=False)
+        model_path = ckpt_path
+        backend = "Torch causal SeismicUNet CPU"
+        ort_version = None
+        merge_description = "causal chunk emission; unknown future filled from latest real sample"
 
-    start = time.perf_counter()
-    streaming = stream_probabilities(
-        signal,
-        predict,
-        window_samples=window_samples,
-        hop_samples=hop_samples,
-        batch_size=args.batch_size,
-    )
-    elapsed_s = time.perf_counter() - start
+        def predict(batch):
+            with torch.inference_mode():
+                return model(torch.from_numpy(batch.astype(np.float32))).numpy()
+
+        start = time.perf_counter()
+        streaming = causal_stream_probabilities(
+            signal,
+            predict,
+            CausalPreprocessor(cfg, warmup_samples=min(int(fs), args.chunk_samples)),
+            chunk_samples=args.chunk_samples,
+        )
+        elapsed_s = time.perf_counter() - start
+    else:
+        model_path = Path(args.model)
+        if not model_path.is_file():
+            raise SystemExit(f"ONNX model not found: {model_path}")
+        session, input_name, output_name, ort_version = make_session(model_path, threads)
+        backend = "ONNX Runtime CPUExecutionProvider"
+        merge_description = "uniform mean over overlapping window probabilities"
+
+        def predict(batch):
+            model_input = batch
+            if not preprocessed:
+                model_input = np.stack(
+                    [preprocess_waveform(window, cfg) for window in batch]
+                ).astype(np.float32)
+            return session.run([output_name], {input_name: model_input})[0]
+
+        start = time.perf_counter()
+        streaming = stream_probabilities(
+            signal,
+            predict,
+            window_samples=window_samples,
+            hop_samples=hop_samples,
+            batch_size=args.batch_size,
+        )
+        elapsed_s = time.perf_counter() - start
 
     events = extract_events(
         streaming.probabilities[0], fs, detection_threshold, min_duration_ms,
@@ -358,7 +410,7 @@ def main():
     n_s = sum(pick["phase"] == "S" for pick in picks)
     summary = {
         "model": str(model_path),
-        "backend": "ONNX Runtime CPUExecutionProvider",
+        "backend": backend,
         "onnxruntime_version": ort_version,
         "input": input_description,
         "input_preprocessed": preprocessed,
@@ -371,7 +423,8 @@ def main():
         "hop_samples": hop_samples,
         "window_starts": list(streaming.window_starts),
         "n_windows": len(streaming.window_starts),
-        "merge": "uniform mean over overlapping window probabilities",
+        "merge": merge_description,
+        "causal_chunk_samples": args.chunk_samples if args.causal else None,
         "threads": threads,
         "batch_size": args.batch_size,
         "inference_wall_seconds": elapsed_s,
@@ -406,11 +459,10 @@ def main():
 
     lines = [
         "Phase 5d streaming inference",
-        f"model: {model_path} (ONNX Runtime CPU, {threads} thread(s))",
+        f"model: {model_path} ({backend}, {threads} thread(s))",
         f"input: {input_description}",
         f"signal: {signal.shape[1]} samples / {signal.shape[1] / fs:.1f} s at {fs:g} Hz",
-        f"windows: {len(streaming.window_starts)} x {window_s:g} s, hop {hop_s:g} s; "
-        "uniform overlap mean",
+        f"windows/chunks: {len(streaming.window_starts)}; {merge_description}",
         f"operating point: detection >= {detection_threshold:g} for >= "
         f"{min_duration_ms:g} ms; merge gap <= {event_merge_gap_s:g} s; "
         f"P/S >= {p_threshold:g}/{s_threshold:g}",

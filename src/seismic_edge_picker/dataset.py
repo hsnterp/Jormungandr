@@ -20,7 +20,12 @@ from torch.utils.data import Dataset
 
 from . import augment as A
 from .labels import build_label_mask_from_cfg
-from .preprocessing import filter_only, normalize
+from .preprocessing import (
+    causal_filter_only,
+    causal_normalize_only,
+    filter_only,
+    normalize,
+)
 from . import splits as S
 
 
@@ -105,6 +110,7 @@ class SeismicDataset(Dataset):
         self.n_channels = cfg.data.n_channels
         self.n_samples = cfg.data.window_samples
         self.base_seed = seed
+        self.causal_preprocessing = bool(getattr(cfg.model, "causal", False))
         self.epoch = 0
         self.metadata = ds.metadata
 
@@ -123,6 +129,8 @@ class SeismicDataset(Dataset):
         def sample():
             j = int(self.noise_pool[rng.integers(len(self.noise_pool))])
             wf = _get_waveform(self.ds, j, self.n_channels, self.n_samples)
+            if self.causal_preprocessing:
+                return causal_filter_only(wf, self.cfg)
             return filter_only(wf, self.cfg)
 
         return sample
@@ -143,13 +151,20 @@ class SeismicDataset(Dataset):
             for k, v in arrivals.items()
         }
 
-        x = filter_only(wf, self.cfg)
+        x = (
+            causal_filter_only(wf, self.cfg)
+            if self.causal_preprocessing
+            else filter_only(wf, self.cfg)
+        )
         if self.train:
             x, arrivals = A.apply_augmentations(
                 x, arrivals, self.cfg, rng, self._noise_sampler(rng)
             )
-        x = normalize(x, self.cfg.data.preprocess.normalization,
-                      self.cfg.data.preprocess.eps)
+        if self.causal_preprocessing:
+            x = causal_normalize_only(x, self.cfg)
+        else:
+            x = normalize(x, self.cfg.data.preprocess.normalization,
+                          self.cfg.data.preprocess.eps)
 
         y = build_label_mask_from_cfg(
             self.n_samples, arrivals["p"], arrivals["s"], arrivals["coda"], self.cfg

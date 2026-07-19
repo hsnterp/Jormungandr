@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jormungandr — edge transmission gating</title>
+<style>
+  :root{
+    --surface:#000000; --panel:#111113; --panel-2:#191919;
+    --ink:#ececee; --secondary:#96969e; --muted:#616169;
+    --line:#232326; --grid:#161618; --baseline:#2c2c2c;
+    --wave-z:#d6d6da; --wave-n:#78787f; --wave-e:#494950;
+    --p:#6b9fd8; --s:#d98a5c; --det:#5aa17d; --sta:#c6a24e;
+    --critical:#cc6a6a; --warning:#c6a24e; --good:#5aa17d;
+    --radius:14px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  html{color-scheme:dark}
+  body{
+    background:var(--surface); color:var(--ink);
+    font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1320px; margin:0 auto; padding:24px 26px 36px}
+
+  .controls{display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:0 0 18px}
+  .btn{appearance:none; border:1px solid var(--line); background:var(--panel);
+    color:var(--ink); border-radius:10px; padding:9px 15px; cursor:pointer;
+    font-size:13px; font-weight:600; line-height:1; transition:border-color .12s, background .12s, transform .04s;}
+  .btn:hover{border-color:var(--p)}
+  .btn:active{transform:translateY(1px)}
+  .btn.primary{background:var(--ink); color:#000; border-color:var(--ink)}
+  .btn.primary:hover{background:#fff}
+  .spd{display:inline-flex; border:1px solid var(--line); border-radius:10px; overflow:hidden}
+  .spd button{appearance:none; border:0; background:var(--panel); color:var(--secondary);
+    padding:9px 12px; cursor:pointer; font-size:12.5px; font-weight:600; border-left:1px solid var(--line)}
+  .spd button:first-child{border-left:0}
+  .spd button.active{background:var(--p); color:#04122b}
+  .spacer{flex:1 1 auto}
+  .segtag{display:inline-flex; align-items:center; gap:8px; font-size:12.5px; color:var(--secondary)}
+  .segtag .dot{width:8px; height:8px; border-radius:50%; background:var(--muted)}
+  .segtag.eq .dot{background:var(--p)}
+  .segtag.noise .dot{background:var(--muted)}
+
+  /* main split: waveform stage on the left, byte columns on the right */
+  .main{display:flex; gap:30px; align-items:flex-start}
+  .left{flex:1 1 auto; min-width:0}
+  .right{flex:0 0 300px; width:300px; border-left:1px solid var(--line); padding-left:28px}
+
+  .stage{background:transparent; padding:0}
+  .stage canvas{display:block; width:100%; height:auto}
+
+  .readout{display:flex; flex-wrap:wrap; align-items:center; gap:10px 20px; margin:14px 2px 0;
+    font-size:13px; color:var(--secondary); font-variant-numeric:tabular-nums}
+  .readout .k{color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.04em; margin-right:6px}
+  .readout .v{color:var(--ink); font-weight:650}
+  .pill{display:inline-flex; align-items:center; gap:6px; padding:3px 9px; border-radius:999px;
+    font-size:12px; font-weight:650; border:1px solid transparent}
+  .pill.armed{background:rgba(90,161,125,.14); color:#7ec5a0; border-color:rgba(90,161,125,.38)}
+  .pill.idle{background:var(--panel-2); color:var(--muted)}
+  .pill.tx{background:rgba(90,161,125,.15); color:#7ec5a0; border-color:rgba(90,161,125,.42)}
+  .pill.false{background:rgba(204,106,106,.13); color:#dd9090; border-color:rgba(204,106,106,.38)}
+
+  /* vertical byte columns */
+  .bytes-title{font-size:11.5px; letter-spacing:.09em; text-transform:uppercase;
+    color:var(--muted); font-weight:600; margin:0 0 22px}
+  .cols{display:flex; align-items:flex-end; justify-content:space-between; gap:20px}
+  .colcell{flex:1 1 0; display:flex; flex-direction:column; align-items:center; min-width:0}
+  .coltrack{position:relative; width:100%; height:420px; display:flex; align-items:flex-end;
+    border-bottom:1px solid var(--line)}
+  .colfill{position:relative; width:100%; height:0; border-radius:3px 3px 0 0;
+    transition:height .35s cubic-bezier(.4,0,.2,1)}
+  .colfill.raw{background:var(--critical)}
+  .colfill.sta{background:var(--warning)}
+  .colfill.mod{background:var(--good)}
+  .colval{position:absolute; left:50%; top:-24px; transform:translateX(-50%); white-space:nowrap;
+    font-size:12.5px; font-weight:700; color:var(--ink); font-variant-numeric:tabular-nums; text-align:center}
+  .colval .sub{display:block; color:var(--muted); font-weight:500; font-size:10px; margin-top:1px}
+  .collab{margin-top:12px; text-align:center; font-size:12px; color:var(--secondary)}
+  .collab b{display:block; color:var(--ink); font-weight:650; font-size:12.5px; margin-bottom:1px}
+
+  .gap{margin-top:34px; border-top:1px solid var(--line); padding-top:22px}
+  .gap .lead{font-size:11px; letter-spacing:.09em; text-transform:uppercase; color:var(--muted); font-weight:600}
+  .gap .num{font-size:34px; font-weight:700; color:var(--ink); font-variant-numeric:tabular-nums;
+    line-height:1.05; margin-top:8px}
+  .gap .who{font-size:12.5px; color:var(--secondary); margin-top:5px}
+  .gap.idle .num{color:var(--muted); font-weight:600}
+
+  .legend{display:flex; flex-wrap:wrap; gap:16px; margin:16px 2px 0; font-size:12px; color:var(--muted)}
+  .legend span{display:inline-flex; align-items:center; gap:7px; white-space:nowrap}
+  .legend i{display:inline-block; width:18px; height:0; border-top:3px solid currentColor; border-radius:2px}
+  .legend i.area{height:11px; border:0; border-radius:2px; opacity:.9}
+
+  .empty{padding:60px 20px; text-align:center; color:var(--muted); font-size:14px}
+  .empty code{background:var(--panel-2); padding:2px 7px; border-radius:6px; color:var(--secondary)}
+
+  @media (max-width:860px){
+    .main{flex-direction:column}
+    .right{flex-basis:auto; width:100%; border-left:0; border-top:1px solid var(--line);
+      padding-left:0; padding-top:24px; margin-top:8px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap" id="wrap"></div>
+
+<script id="gating-data" type="application/json">/*__GATING_DATA__*/null</script>
+<script>
+"use strict";
+const DATA = (function(){
+  try { return JSON.parse(document.getElementById("gating-data").textContent); }
+  catch(e){ return null; }
+})();
+
+const wrap = document.getElementById("wrap");
+
+if(!DATA || !DATA.traces || !DATA.traces.length){
+  wrap.innerHTML = '<div class="empty">No run data embedded.<br><br>'+
+    'Generate it with <code>python3 scripts/export_gating_traces.py</code>, then reopen '+
+    '<code>outputs/demo/gating_demo.html</code>.</div>';
+} else {
+  boot(DATA);
+}
+
+function fmtBytes(n){
+  if(n>=1e6) return (n/1e6).toFixed(2)+" MB";
+  if(n>=1e3) return (n/1e3).toFixed(1)+" KB";
+  return Math.round(n)+" B";
+}
+
+function boot(D){
+  const META = D.meta, SESS = D.session;
+  const ORDER = D.traces.map((_,i)=>i);          // eq…eq, noise last (as bundled)
+  const DET_TH = META.det_threshold, STA_TH = META.stalta_on;
+  const RAW_FINAL = SESS.bytes.raw_continuous;    // fixed bar scale
+  const SPEEDS = [1,2,4,8];
+
+  // ---- DOM ---------------------------------------------------------------
+  wrap.innerHTML = `
+    <div class="controls">
+      <button class="btn primary" id="play">▮▮ Pause</button>
+      <button class="btn" id="restart">↻ Restart</button>
+      <div class="spd" id="spd"></div>
+      <div class="spacer"></div>
+      <div class="segtag" id="segtag"><span class="dot"></span><span id="segtxt">—</span></div>
+    </div>
+
+    <div class="main">
+      <div class="left">
+        <div class="stage"><canvas id="cv"></canvas></div>
+        <div class="legend">
+          <span style="color:var(--wave-z)"><i></i>Z / N / E waveform</span>
+          <span style="color:var(--p)"><i></i>P pick</span>
+          <span style="color:var(--s)"><i></i>S pick</span>
+          <span style="color:var(--det)"><i class="area" style="background:var(--det)"></i>model detection</span>
+          <span style="color:var(--sta)"><i></i>STA/LTA ratio</span>
+        </div>
+        <div class="readout" id="readout"></div>
+      </div>
+
+      <div class="right">
+        <p class="bytes-title">Bytes on the wire</p>
+        <div class="cols">
+          <div class="colcell">
+            <div class="coltrack"><div class="colfill raw" id="bar-raw"><div class="colval" id="val-raw"></div></div></div>
+            <div class="collab"><b>Raw</b>everything</div>
+          </div>
+          <div class="colcell">
+            <div class="coltrack"><div class="colfill sta" id="bar-sta"><div class="colval" id="val-sta"></div></div></div>
+            <div class="collab"><b>STA/LTA</b>energy</div>
+          </div>
+          <div class="colcell">
+            <div class="coltrack"><div class="colfill mod" id="bar-mod"><div class="colval" id="val-mod"></div></div></div>
+            <div class="collab"><b>Model</b>INT8 U-Net</div>
+          </div>
+        </div>
+        <div class="gap idle" id="gap"></div>
+      </div>
+    </div>`;
+
+  // speed buttons
+  const spd = document.getElementById("spd");
+  let speed = 4;
+  SPEEDS.forEach(s=>{
+    const b=document.createElement("button");
+    b.textContent = s+"×"; b.dataset.s=s; if(s===speed) b.className="active";
+    b.onclick=()=>{ speed=s; [...spd.children].forEach(c=>c.classList.toggle("active",+c.dataset.s===s)); };
+    spd.appendChild(b);
+  });
+
+  // ---- canvas / DPR ------------------------------------------------------
+  const cv = document.getElementById("cv");
+  const ctx = cv.getContext("2d");
+  const CSS_H = 580;
+  let W=0, H=CSS_H, dpr=1;
+  function resize(){
+    dpr = Math.max(1, window.devicePixelRatio||1);
+    W = cv.clientWidth || document.querySelector(".left").clientWidth;
+    cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+  window.addEventListener("resize", ()=>{ resize(); draw(); });
+
+  // plot geometry (three stacked regions inside one canvas)
+  const PAD_L=54, PAD_R=18, PAD_T=34, PAD_B=26;
+  function regions(){
+    const plotW = W-PAD_L-PAD_R;
+    const plotH = H-PAD_T-PAD_B;
+    const wH = plotH*0.40, dH = plotH*0.29, sH = plotH*0.25, gap = plotH*0.03;
+    const wY=[PAD_T, PAD_T+wH];
+    const dY=[wY[1]+gap, wY[1]+gap+dH];
+    const sY=[dY[1]+gap, dY[1]+gap+sH];
+    return {plotW, wY, dY, sY};
+  }
+
+  // ---- session state -----------------------------------------------------
+  let oi=0;                 // index into ORDER
+  let tSec=0;               // playhead within current trace (seconds)
+  let baseSecs=0;          // elapsed seconds of completed traces
+  let acc={raw:0, sta:0, mod:0, staN:0, modN:0, staF:0, modF:0};
+  let firedSet=new Set();  // "oi:fireIdx" already counted
+  let flashes=[];          // {x, t0, gate, false}
+  let playing=true, finished=false, lastTs=0;
+
+  function curTrace(){ return D.traces[ORDER[oi]]; }
+
+  function resetAll(){
+    oi=0; tSec=0; baseSecs=0; finished=false; playing=true;
+    acc={raw:0,sta:0,mod:0,staN:0,modN:0,staF:0,modF:0};
+    firedSet.clear(); flashes.length=0;
+    document.getElementById("play").textContent="▮▮ Pause";
+  }
+
+  document.getElementById("restart").onclick=()=>{ resetAll(); };
+  document.getElementById("play").onclick=()=>{
+    if(finished){ resetAll(); return; }
+    playing=!playing;
+    document.getElementById("play").textContent = playing?"▮▮ Pause":"▶ Play";
+  };
+
+  // consume fires whose time has passed on the current trace
+  function consumeFires(TR){
+    (TR.fires||[]).forEach((f,fi)=>{
+      const key=oi+":"+fi;
+      if(f.t<=tSec && !firedSet.has(key)){
+        firedSet.add(key);
+        if(f.gate==="model"){ acc.mod+=f.bytes; acc.modN++; if(f.false)acc.modF++; }
+        else { acc.sta+=f.bytes; acc.staN++; if(f.false)acc.staF++; }
+        flashes.push({t:f.t, t0:performance.now(), gate:f.gate, false:f.false});
+      }
+    });
+  }
+
+  // ---- main loop ---------------------------------------------------------
+  function tick(ts){
+    if(!lastTs) lastTs=ts;
+    let dt=(ts-lastTs)/1000; lastTs=ts;
+    if(dt>0.1) dt=0.1;                      // clamp after tab-switch
+    const TR=curTrace();
+
+    if(playing && !finished){
+      tSec += dt*speed;
+      // raw grows continuously with elapsed wall-clock of the stream
+      const elapsed = baseSecs + Math.min(tSec, TR.n_seconds);
+      acc.raw = Math.min(RAW_FINAL, Math.round(elapsed * META.fs * 3 * META.bytes_per_sample));
+      consumeFires(TR);
+      if(tSec >= TR.n_seconds){
+        // finalize this trace, advance
+        (TR.fires||[]).forEach((f,fi)=>{ // ensure any trailing fire counted
+          const key=oi+":"+fi;
+          if(!firedSet.has(key)){ firedSet.add(key);
+            if(f.gate==="model"){acc.mod+=f.bytes;acc.modN++;if(f.false)acc.modF++;}
+            else{acc.sta+=f.bytes;acc.staN++;if(f.false)acc.staF++;} }
+        });
+        baseSecs += TR.n_seconds;
+        if(oi < ORDER.length-1){ oi++; tSec=0; }
+        else { finished=true; playing=false;
+          acc.raw=RAW_FINAL; acc.sta=SESS.bytes.stalta_gated; acc.mod=SESS.bytes.model_gated;
+          document.getElementById("play").textContent="↻ Replay"; }
+      }
+    }
+    draw();
+    updateHud();
+    requestAnimationFrame(tick);
+  }
+
+  // ---- drawing -----------------------------------------------------------
+  function draw(){
+    const TR=curTrace();
+    const R=regions();
+    ctx.clearRect(0,0,W,H);
+    const tShown=Math.min(tSec, TR.n_seconds);
+    const xOf = t => PAD_L + (t/TR.n_seconds)*R.plotW;
+    // reveal index
+    let idx=TR.t.length-1;
+    for(let i=0;i<TR.t.length;i++){ if(TR.t[i]>tShown){ idx=i; break; } }
+
+    gridAndAxis(TR,R,xOf);
+    drawWave(TR,R,xOf,idx);
+    drawDet(TR,R,xOf,idx);
+    drawSta(TR,R,xOf,idx);
+    drawTriggers(TR,R,xOf,tShown);
+    drawPicks(TR,R,xOf,tShown);
+    drawPlayhead(R,xOf,tShown);
+  }
+
+  function gridAndAxis(TR,R,xOf){
+    ctx.save();
+    ctx.strokeStyle=getCSS("--grid"); ctx.lineWidth=1;
+    ctx.fillStyle=getCSS("--muted"); ctx.font="11px system-ui,sans-serif";
+    const step = TR.n_seconds>40?10:5;
+    ctx.textAlign="center"; ctx.textBaseline="top";
+    for(let s=0;s<=TR.n_seconds+0.01;s+=step){
+      const x=xOf(s);
+      ctx.beginPath(); ctx.moveTo(x,R.wY[0]); ctx.lineTo(x,R.sY[1]); ctx.stroke();
+      ctx.fillText(s+"s", x, R.sY[1]+5);
+    }
+    // region labels
+    ctx.textAlign="left"; ctx.textBaseline="alphabetic";
+    ctx.fillStyle=getCSS("--muted");
+    ctx.fillText("waveform (Z·N·E)", PAD_L+2, R.wY[0]+12);
+    ctx.fillText("model detection", PAD_L+2, R.dY[0]+12);
+    ctx.fillText("STA/LTA", PAD_L+2, R.sY[0]+12);
+    ctx.restore();
+  }
+
+  function drawWave(TR,R,xOf,idx){
+    const mid=(R.wY[0]+R.wY[1])/2, amp=(R.wY[1]-R.wY[0])/2*0.92;
+    const chans=[["wave-e","--wave-e",2],["wave-n","--wave-n",1],["wave-z","--wave-z",0]];
+    for(const [,cssv,ch] of chans){
+      ctx.beginPath(); ctx.strokeStyle=getCSS(cssv);
+      ctx.lineWidth=ch===0?1.4:1.0; ctx.lineJoin="round";
+      for(let i=0;i<=idx;i++){
+        const x=xOf(TR.t[i]), y=mid - TR.wave[ch][i]*amp;
+        i?ctx.lineTo(x,y):ctx.moveTo(x,y);
+      }
+      ctx.stroke();
+    }
+  }
+
+  function drawDet(TR,R,xOf,idx){
+    const y0=R.dY[1], h=R.dY[1]-R.dY[0];
+    // threshold line
+    ctx.save();
+    ctx.strokeStyle="rgba(90,161,125,0.38)"; ctx.setLineDash([4,4]); ctx.lineWidth=1;
+    const yth=y0-DET_TH*h;
+    ctx.beginPath(); ctx.moveTo(PAD_L,yth); ctx.lineTo(PAD_L+R.plotW,yth); ctx.stroke();
+    ctx.setLineDash([]);
+    // area
+    ctx.beginPath(); ctx.moveTo(xOf(TR.t[0]),y0);
+    for(let i=0;i<=idx;i++) ctx.lineTo(xOf(TR.t[i]), y0-clamp01(TR.det[i])*h);
+    ctx.lineTo(xOf(TR.t[idx]),y0); ctx.closePath();
+    ctx.fillStyle="rgba(90,161,125,0.12)"; ctx.fill();
+    // line
+    ctx.beginPath(); ctx.strokeStyle=getCSS("--det"); ctx.lineWidth=2; ctx.lineJoin="round";
+    for(let i=0;i<=idx;i++){ const x=xOf(TR.t[i]),y=y0-clamp01(TR.det[i])*h; i?ctx.lineTo(x,y):ctx.moveTo(x,y); }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawSta(TR,R,xOf,idx){
+    const y0=R.sY[1], h=R.sY[1]-R.sY[0], SMAX=10;
+    ctx.save();
+    ctx.strokeStyle="rgba(198,162,78,0.4)"; ctx.setLineDash([4,4]); ctx.lineWidth=1;
+    const yth=y0-(STA_TH/SMAX)*h;
+    ctx.beginPath(); ctx.moveTo(PAD_L,yth); ctx.lineTo(PAD_L+R.plotW,yth); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath(); ctx.strokeStyle=getCSS("--sta"); ctx.lineWidth=1.8; ctx.lineJoin="round";
+    for(let i=0;i<=idx;i++){ const x=xOf(TR.t[i]),y=y0-Math.min(TR.ratio[i],SMAX)/SMAX*h; i?ctx.lineTo(x,y):ctx.moveTo(x,y); }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawPicks(TR,R,xOf,tShown){
+    const marks=[["P",TR.model.p,TR.catalog.p,getCSS("--p")],
+                 ["S",TR.model.s,TR.catalog.s,getCSS("--s")]];
+    for(const [name,mt,ct,col] of marks){
+      if(mt==null || mt>tShown) continue;
+      const x=xOf(mt);
+      // model pick: solid vertical line across waveform region + flag
+      ctx.save();
+      ctx.strokeStyle=col; ctx.lineWidth=1.6;
+      ctx.beginPath(); ctx.moveTo(x,R.wY[0]); ctx.lineTo(x,R.wY[1]); ctx.stroke();
+      // catalog tick (dashed, thin) if present
+      if(ct!=null){
+        const xc=xOf(ct);
+        ctx.strokeStyle="rgba(255,255,255,0.32)"; ctx.setLineDash([3,3]); ctx.lineWidth=1;
+        ctx.beginPath(); ctx.moveTo(xc,R.wY[0]); ctx.lineTo(xc,R.wY[1]); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      // flag label
+      const lab = name+" "+mt.toFixed(1)+"s";
+      ctx.font="600 11px system-ui,sans-serif"; ctx.textBaseline="middle";
+      const tw=ctx.measureText(lab).width;
+      const fx=Math.min(x+5, PAD_L+R.plotW-tw-8), fy=R.wY[0]+9;
+      ctx.fillStyle=col; roundRect(ctx, fx-4, fy-8, tw+8, 16, 4); ctx.fill();
+      ctx.fillStyle="#0c0f14"; ctx.textAlign="left"; ctx.fillText(lab, fx, fy);
+      ctx.restore();
+    }
+  }
+
+  // Transmission markers. A fire is drawn in the lane of the detector that fired
+  // (model -> detection lane, STA/LTA -> ratio lane), so the two gates are
+  // separated both in space and time. The marker is PERSISTENT for the rest of
+  // the trace — only the soft ring pulses briefly at the moment it fires.
+  function drawTriggers(TR,R,xOf,tShown){
+    const now=performance.now();
+    (TR.fires||[]).forEach((f,fi)=>{
+      const key=oi+":"+fi;
+      if(!firedSet.has(key) || f.t>tShown) return;
+      const model=f.gate==="model";
+      const col=f.false?getCSS("--critical"):(model?getCSS("--good"):getCSS("--sta"));
+      const lane=model?R.dY:R.sY;          // which detector's lane
+      const x=xOf(f.t);
+      const fl=flashes.find(z=>z.gate===f.gate && Math.abs(z.t-f.t)<1e-6);
+      const age=fl?Math.min(1,(now-fl.t0)/1400):1;   // 1 == settled (no pulse)
+      const yTop=lane[0]-5;
+
+      ctx.save();
+      // persistent guide line down the firing detector's lane
+      ctx.strokeStyle=col; ctx.globalAlpha=age<1?1:0.8; ctx.lineWidth=1.2;
+      ctx.beginPath(); ctx.moveTo(x,yTop); ctx.lineTo(x,lane[1]); ctx.stroke();
+      // marker dot
+      ctx.globalAlpha=1; ctx.fillStyle=col;
+      ctx.beginPath(); ctx.arc(x,yTop,2.6,0,Math.PI*2); ctx.fill();
+      // gentle expanding ring only while the fire is recent
+      if(age<1){
+        ctx.globalAlpha=(1-age)*0.5; ctx.lineWidth=1.3;
+        ctx.beginPath(); ctx.arc(x,yTop,3+age*15,0,Math.PI*2); ctx.stroke();
+      }
+      // persistent, quietly-dimmed label
+      const lab=(model?"model":"STA/LTA")+(f.false?" · false":"");
+      ctx.font="600 10.5px system-ui,sans-serif"; ctx.textBaseline="alphabetic"; ctx.textAlign="left";
+      const tw=ctx.measureText(lab).width;
+      const lx=Math.min(x+6, PAD_L+R.plotW-tw-4);
+      ctx.globalAlpha=age<1?1:0.6;
+      ctx.fillStyle=col; ctx.fillText(lab, lx, yTop-4);
+      ctx.restore();
+    });
+  }
+
+  function drawPlayhead(R,xOf,tShown){
+    const x=xOf(tShown);
+    ctx.save();
+    ctx.strokeStyle="rgba(255,255,255,0.18)"; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x,R.wY[0]); ctx.lineTo(x,R.sY[1]); ctx.stroke();
+    ctx.restore();
+  }
+
+  // ---- HUD (numbers + bars) ---------------------------------------------
+  function updateHud(){
+    const TR=curTrace();
+    const tShown=Math.min(tSec, TR.n_seconds);
+    // current det value at playhead
+    let idx=0; for(let i=0;i<TR.t.length;i++){ if(TR.t[i]<=tShown) idx=i; else break; }
+    const det=TR.det[idx]||0, rat=TR.ratio[idx]||0;
+    const armed = det>=DET_TH;
+
+    // segment tag
+    const st=document.getElementById("segtag"), stx=document.getElementById("segtxt");
+    st.className="segtag "+(TR.is_eq?"eq":"noise");
+    stx.textContent = (TR.is_eq?"earthquake":"ambient noise")+" · "+TR.id+
+      "   ("+(oi+1)+"/"+ORDER.length+")";
+
+    const armPill = armed?'<span class="pill armed">det '+det.toFixed(2)+' · ARMED</span>'
+                         :'<span class="pill idle">det '+det.toFixed(2)+'</span>';
+    const picks = TR.is_eq
+      ? 'P '+pk(TR.model.p,tShown)+' <span style="color:var(--muted)">(cat '+cx(TR.catalog.p)+')</span> · '+
+        'S '+pk(TR.model.s,tShown)+' <span style="color:var(--muted)">(cat '+cx(TR.catalog.s)+')</span>'
+      : '<span style="color:var(--muted)">no earthquake — model stays silent</span>';
+
+    document.getElementById("readout").innerHTML =
+      '<span><span class="k">t</span><span class="v">'+tShown.toFixed(1)+'s</span></span>'+
+      '<span>'+armPill+'</span>'+
+      '<span><span class="k">STA/LTA</span><span class="v">'+rat.toFixed(1)+'</span></span>'+
+      '<span><span class="k">picks</span>'+picks+'</span>';
+
+    // columns
+    setBar("bar-raw","val-raw", acc.raw, "");
+    setBar("bar-sta","val-sta", acc.sta, sub(acc.staN,acc.staF));
+    setBar("bar-mod","val-mod", acc.mod, sub(acc.modN,acc.modF));
+
+    // detection-gap stat: how far apart the model and STA/LTA first fired on
+    // this earthquake (positive = model detected it earlier).
+    const gapEl=document.getElementById("gap");
+    let fm=null, fs=null;
+    (TR.fires||[]).forEach((f,fi)=>{
+      if(!firedSet.has(oi+":"+fi)) return;
+      if(f.gate==="model"){ if(fm===null||f.t<fm) fm=f.t; }
+      else { if(fs===null||f.t<fs) fs=f.t; }
+    });
+    if(TR.is_eq && fm!=null && fs!=null){
+      const d=fs-fm;
+      const who = Math.abs(d)<0.25
+        ? '<span style="color:var(--secondary)">both fired together</span>'
+        : (d>0 ? '<span style="color:var(--good)">model detected it first</span>'
+               : '<span style="color:var(--sta)">STA/LTA detected it first</span>');
+      gapEl.className="gap";
+      gapEl.innerHTML='<div class="lead">model − STA/LTA gap</div>'+
+        '<div class="num">'+Math.abs(d).toFixed(1)+' s</div>'+
+        '<div class="who">'+who+'</div>';
+    } else {
+      const note = !TR.is_eq ? 'no earthquake — both gates silent'
+        : (fm!=null ? 'model armed — STA/LTA still silent'
+        : (fs!=null ? 'STA/LTA armed — model still silent' : 'waiting for a trigger…'));
+      gapEl.className="gap idle";
+      gapEl.innerHTML='<div class="lead">model − STA/LTA gap</div>'+
+        '<div class="num">—</div><div class="who">'+note+'</div>';
+    }
+  }
+  function sub(n,f){ return n?(n+" tx"+(f?", "+f+" false":"")):""; }
+  function pk(v,t){ return (v!=null&&v<=t)?v.toFixed(1)+"s":"—"; }
+  function cx(v){ return v!=null?v.toFixed(1)+"s":"—"; }
+  function setBar(barId,valId,bytes,extra){
+    const pct=Math.min(100, bytes/RAW_FINAL*100);
+    document.getElementById(barId).style.height=pct.toFixed(2)+"%";
+    document.getElementById(valId).innerHTML=fmtBytes(bytes)+(extra?'<span class="sub">'+extra+'</span>':'');
+  }
+
+  // ---- helpers -----------------------------------------------------------
+  function getCSS(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+  function clamp01(x){ return x<0?0:x>1?1:x; }
+  function roundRect(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r);
+    c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); }
+
+  resize();
+  requestAnimationFrame(tick);
+}
+</script>
+</body>
+</html>

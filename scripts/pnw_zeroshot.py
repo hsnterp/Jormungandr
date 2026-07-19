@@ -52,7 +52,9 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 from seismic_edge_picker.config import load_config  # noqa: E402
 from seismic_edge_picker.model import build_model, count_parameters  # noqa: E402
-from seismic_edge_picker.preprocessing import preprocess_waveform  # noqa: E402
+from seismic_edge_picker.preprocessing import (  # noqa: E402
+    preprocess_waveform, preprocess_waveform_causal,
+)
 from evaluate import (  # noqa: E402
     pick_from_stream, detect_event, prf, residual_stats, snr_bucket_label,
 )
@@ -171,6 +173,10 @@ def parse_args():
     p.add_argument("--out", default=str(REPO / "outputs" / "pnw_zeroshot"))
     p.add_argument("--cache", default=str(REPO / "data" / "pnw_cache"))
     p.add_argument("--device", default=None)
+    p.add_argument("--checkpoint", default=str(REPO / "checkpoints/stage2_distill/best.pt"),
+                   help="student checkpoint to evaluate (default: shipped stage2)")
+    p.add_argument("--causal", action="store_true",
+                   help="evaluate the causal variant (causal arch + causal preprocessing)")
     return p.parse_args()
 
 
@@ -190,12 +196,16 @@ def main():
     edges = list(ev.snr_buckets)
 
     # ---- student ----------------------------------------------------------
-    ckpt = torch.load(REPO / "checkpoints/stage2_distill/best.pt",
-                      map_location="cpu", weights_only=True)
+    if args.causal:
+        cfg.model.causal = True
+        cfg.model.lookahead = 0
+    ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
     model = build_model(cfg).to(dev).eval()
-    model.load_state_dict(ckpt["model_state_dict"])
-    print(f"student: stage2_distill/best.pt epoch={ckpt.get('epoch')} "
-          f"params={count_parameters(model):,} device={dev}")
+    model.load_state_dict(ckpt["model_state_dict"], strict=False)
+    # causal net must see the same causal preprocessing it was trained on
+    prep = preprocess_waveform_causal if args.causal else preprocess_waveform
+    print(f"student: {args.checkpoint} epoch={ckpt.get('epoch')} "
+          f"causal={args.causal} params={count_parameters(model):,} device={dev}")
 
     # ---- select subset (reproducible) -------------------------------------
     cache = Path(args.cache)
@@ -257,7 +267,7 @@ def main():
         if not (np.isfinite(p_samp) and np.isfinite(s_samp)):
             continue
         seg, gp, gs = window_event(wf, p_samp, s_samp, args.p_offset, win)
-        xp = preprocess_waveform(seg, cfg)
+        xp = prep(seg, cfg)
         batch_x.append(xp)
         batch_meta.append({"is_eq": True, "snr": parse_snr(row.get("trace_snr_db")),
                            "src": row["source_type"], "gt_p": gp, "gt_s": gs})
@@ -271,7 +281,7 @@ def main():
             continue
         wf = enz_to_zne(wf)
         seg = wf[:, :win]
-        xp = preprocess_waveform(seg, cfg)
+        xp = prep(seg, cfg)
         batch_x.append(xp)
         batch_meta.append({"is_eq": False, "snr": float("nan"),
                            "src": "noise", "gt_p": None, "gt_s": None})
