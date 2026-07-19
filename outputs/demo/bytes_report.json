@@ -10,16 +10,16 @@
       "on": 3.0
     }
   },
-  "elapsed_seconds": 300.0,
+  "elapsed_seconds": 360.0,
   "bytes": {
-    "raw_continuous": 180000,
-    "stalta_gated": 21485,
+    "raw_continuous": 216000,
+    "stalta_gated": 27712,
     "model_gated": 8746
   },
   "transmissions": {
     "stalta": {
-      "count": 6,
-      "false": 0
+      "count": 7,
+      "false": 1
     },
     "model": {
       "count": 4,
@@ -27,15 +27,15 @@
     }
   },
   "reduction_vs_raw": {
-    "stalta": 8.4,
-    "model": 20.6
+    "stalta": 7.8,
+    "model": 24.7
   },
-  "model_vs_stalta_bytes_x": 2.5,
+  "model_vs_stalta_bytes_x": 3.2,
   "transmission_log": [
     {
       "gate": "stalta",
       "t_s": 5.5,
-      "bytes": 3519,
+      "bytes": 3520,
       "false": false
     },
     {
@@ -91,6 +91,12 @@
       "t_s": 5.0,
       "bytes": 2118,
       "false": false
+    },
+    {
+      "gate": "stalta",
+      "t_s": 48.5,
+      "bytes": 6226,
+      "false": true
     }
   ]
 }
