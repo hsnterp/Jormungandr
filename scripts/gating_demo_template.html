@@ -261,9 +261,11 @@ function boot(D){
 
     if(playing && !finished){
       tSec += dt*speed;
-      // raw grows continuously with elapsed wall-clock of the stream
+      // Show the encoded continuous stream accruing with session progress.
+      // Its exact checked total uses the same packet codec as both gates.
       const elapsed = baseSecs + Math.min(tSec, TR.n_seconds);
-      acc.raw = Math.min(RAW_FINAL, Math.round(elapsed * META.fs * 3 * META.bytes_per_sample));
+      acc.raw = Math.min(RAW_FINAL,
+        Math.round((elapsed / SESS.elapsed_seconds) * RAW_FINAL));
       consumeFires(TR);
       if(tSec >= TR.n_seconds){
         // finalize this trace, advance
@@ -413,6 +415,7 @@ function boot(D){
       const col=f.false?getCSS("--critical"):(model?getCSS("--good"):getCSS("--sta"));
       const lane=model?R.dY:R.sY;          // which detector's lane
       const x=xOf(f.t);
+      const decisionX=xOf(f.trigger_t==null?f.t:f.trigger_t);
       const fl=flashes.find(z=>z.gate===f.gate && Math.abs(z.t-f.t)<1e-6);
       const age=fl?Math.min(1,(now-fl.t0)/1400):1;   // 1 == settled (no pulse)
       const yTop=lane[0]-5;
@@ -421,6 +424,12 @@ function boot(D){
       // persistent guide line down the firing detector's lane
       ctx.strokeStyle=col; ctx.globalAlpha=age<1?1:0.8; ctx.lineWidth=1.2;
       ctx.beginPath(); ctx.moveTo(x,yTop); ctx.lineTo(x,lane[1]); ctx.stroke();
+      // decision time: dotted guide; solid guide above is the delayed transmit
+      if(decisionX!==x){
+        ctx.setLineDash([3,3]); ctx.globalAlpha=0.45;
+        ctx.beginPath(); ctx.moveTo(decisionX,yTop); ctx.lineTo(decisionX,lane[1]); ctx.stroke();
+        ctx.setLineDash([]);
+      }
       // marker dot
       ctx.globalAlpha=1; ctx.fillStyle=col;
       ctx.beginPath(); ctx.arc(x,yTop,2.6,0,Math.PI*2); ctx.fill();
@@ -430,7 +439,7 @@ function boot(D){
         ctx.beginPath(); ctx.arc(x,yTop,3+age*15,0,Math.PI*2); ctx.stroke();
       }
       // persistent, quietly-dimmed label
-      const lab=(model?"model":"STA/LTA")+(f.false?" · false":"");
+      const lab=(model?"model":"STA/LTA")+" · tx"+(f.false?" · false":"");
       ctx.font="600 10.5px system-ui,sans-serif"; ctx.textBaseline="alphabetic"; ctx.textAlign="left";
       const tw=ctx.measureText(lab).width;
       const lx=Math.min(x+6, PAD_L+R.plotW-tw-4);
@@ -487,8 +496,9 @@ function boot(D){
     let fm=null, fs=null;
     (TR.fires||[]).forEach((f,fi)=>{
       if(!firedSet.has(oi+":"+fi)) return;
-      if(f.gate==="model"){ if(fm===null||f.t<fm) fm=f.t; }
-      else { if(fs===null||f.t<fs) fs=f.t; }
+      const decision=f.trigger_t==null?f.t:f.trigger_t;
+      if(f.gate==="model"){ if(fm===null||decision<fm) fm=decision; }
+      else { if(fs===null||decision<fs) fs=decision; }
     });
     if(TR.is_eq && fm!=null && fs!=null){
       const d=fs-fm;

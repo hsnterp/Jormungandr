@@ -67,11 +67,11 @@ Full numbers, tables, and reproduction commands are in
   tuned STA/LTA on the same data (about 6x fewer), with about 27x tighter
   onset timing when it does fire (54 ms vs 1,458 ms MAE).
 - In a 6 minute end-to-end replay of real STEAD earthquakes, the model gate
-  transmitted 4 packets (all real events, 8,746 bytes total) against
-  STA/LTA's 7 packets (1 false, 27,712 bytes); continuous raw transmission
-  over the same session would cost 216,000 bytes. That is roughly a 25x
-  bandwidth reduction versus raw transmission, and about a third of what
-  STA/LTA used.
+  transmitted 4 fixed 10 s packets (all real events) against STA/LTA's 7
+  packets (1 false). With every path encoded identically as int16 compressed
+  NPZ, continuous transmission used 219,897 bytes, STA/LTA 39,104 bytes, and
+  the model 20,520 bytes: 10.7x less than continuous and 1.9x less than
+  STA/LTA. The report also exposes uncompressed payload totals separately.
 - On the sensor: 48,051 parameters, 0.10 MB as INT8 ONNX, 2.4 ms per 60
   second window on a Raspberry Pi CPU (one thread), well under real time at
   the default 30 second streaming hop.
@@ -1011,41 +1011,41 @@ STA/LTA. The main measurement is bytes on the wire: STA/LTA triggers on any
 energy burst and transmits more; the model is more selective and transmits
 less for the same real events.
 
-Three source modes feed one identical pipeline:
+Four source modes feed one edge pipeline:
 
 | `--source` | what it is | shows |
 |---|---|---|
 | `smoke` | deterministic synthetic accel stream, no hardware or dataset | both gates behave; byte counters diverge |
-| `mpu6050` | live I2C read from a physical MPU6050 (Raspberry Pi) | the full pipeline runs in real time on edge hardware and a physical vibration triggers it |
-| `replay` | real STEAD earthquakes streamed through the same causal path | real P and S phase picks the accelerometer cannot produce |
+| `mpu6050` | interleaved live I2C acceleration from an MPU6050 | physical acquisition → persistent causal preprocessing → inference → gating |
+| `mpu3050` | interleaved live I2C angular rate from an MPU3050 | the same edge runtime on the available gyro; motion demo only, not seismic validation |
+| `replay` | real STEAD earthquakes streamed through the same causal path | real P and S phase picks the live motion sensors cannot produce |
 
-**Hardware limitations, read before recording.** The MPU6050 is a ±2 g MEMS
-accelerometer (about 400 μg/√Hz), roughly a million times less sensitive than
-a broadband seismometer, and it measures acceleration. It cannot detect real
-teleseismic earthquakes or reproduce a real P-then-S waveform. What the live
-sensor demonstrates is that the full causal preprocessing, inference, and
-transmission-gating pipeline runs in real time on edge hardware, and that a
-physical vibration triggers it. Real P-then-S phase picking is shown only
-via `--source replay`, which streams real STEAD earthquake waveforms through
-the identical pipeline. The false-trigger-rate result above, 3.08 vs 17.51
-false-triggers/hour, is measured on real STEAD data (see
+**Hardware limitations, read before recording.** The MPU6050 is a consumer
+MEMS accelerometer; the MPU3050 is a three-axis gyroscope measuring angular
+rate. Neither is a broadband seismometer, and gyro XYZ must not be presented as
+seismic ZNE acceleration. Live modes demonstrate the physical edge runtime,
+not earthquake validity. Real P-then-S phase picking is shown only via
+`--source replay`. The 3.08 vs 17.51 false-trigger/hour experiment above is a
+P-stream latency study on real STEAD windows, not a held-out evaluation of the
+deployed detection-stream gate (see
 [The causal streaming detector, versus STA/LTA](#the-causal-streaming-detector-versus-stalta)),
-and is reproduced live only in `replay`.
+so it is not used as the byte-demo's validation claim.
 
 **Bytes on the wire, from a real replay session.** A 6 minute (360 s)
 session built from real STEAD traces run through `--source replay`,
 comparing continuous raw transmission, STA/LTA gating, and model gating,
 all on the same data:
 
-| gate | packets sent | false packets | bytes sent | reduction vs raw |
+| gate | packets sent | false packets | encoded bytes | reduction vs continuous |
 |---|---:|---:|---:|---:|
-| raw, continuous | (none, always on) | — | 216,000 | 1.0x |
-| STA/LTA | 7 | 1 | 27,712 | 7.8x |
-| **causal model** | **4** | **0** | **8,746** | **24.7x** |
+| raw, continuous (36 × 10 s packets) | 36 | — | 219,897 | 1.0x |
+| STA/LTA | 7 | 1 | 39,104 | 5.6x |
+| **causal model** | **4** | **0** | **20,520** | **10.7x** |
 
-The model sent about a third of the bytes STA/LTA needed (3.2x fewer) for
-the same events, with zero false transmissions in this run, consistent with
-the false-trigger-rate result above measured at session scale. Reproduce
+The model sent 1.9x fewer encoded bytes than STA/LTA for the same replay and
+had zero false transmissions in this run. Every path uses the same int16 +
+compressed-NPZ packet codec; gated packets wait for a real 3 s pre-trigger +
+7 s post-trigger clip. Reproduce
 with `python scripts/export_gating_traces.py` (writes
 `outputs/demo/gating_traces.json` and `outputs/demo/bytes_report.json`) or
 `python scripts/demo_edge.py --source replay`.
@@ -1089,7 +1089,7 @@ Jormungandr/
 │   ├── quantize_onnx.py        # INT8 static quantization + parity/eval
 │   ├── benchmark_latency.py    # CPU latency + throughput report
 │   ├── stream_infer.py         # continuous INT8 ONNX inference demo
-│   ├── demo_edge.py            # live MPU6050 / replay transmission-gating demo
+│   ├── demo_edge.py            # live MPU3050/MPU6050 + replay transmission gate
 │   ├── build_replay_bundle.py  # real STEAD replay bundle for the edge demo
 │   ├── export_gating_traces.py # gating-demo data export + HTML page
 │   └── find_false_positive_clip.py # locates a real STA/LTA false-alarm clip
@@ -1183,7 +1183,7 @@ python scripts/causal_latency_curve.py --data --split test --n 2000
 | 3 | training (supervised BCE → EQT distillation, plus causal variant) | ✅ complete |
 | 4 | evaluation (F1, pick MAE/std, SNR buckets, EQT/PhaseNet/PNW comparisons) | ✅ complete |
 | 5 | deployment (ONNX, INT8, latency bench, streaming) | ✅ complete |
-| 6 | edge demo (MPU6050 transmission gating vs STA/LTA) | ✅ complete |
+| 6 | edge demo (MPU3050/MPU6050 acquisition, fixed packets, replay gating) | ✅ complete |
 
 See [`docs/PROGRESS.md`](docs/PROGRESS.md) for detailed status and the
 continuation plan.

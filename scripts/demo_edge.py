@@ -6,34 +6,30 @@ THESIS
 A remote, bandwidth-limited sensor should not stream everything it digitizes; it
 should transmit only when something worth reporting happens. Two on-device
 triggers are compared as the "gate": a classic STA/LTA energy detector and this
-project's causal INT8 U-Net. STA/LTA false-triggers on any energy burst, so it
-transmits far more often (more wasted bytes); the learned model is selective, so
-it transmits far less for the same real events. The headline is bytes-on-the-wire.
+project's causal INT8 U-Net. The bundled replay tests whether the model can avoid
+some energy-only triggers while retaining the known events. The headline is
+measured bytes on the wire, with identical encoding for all paths.
 
 HARDWARE HONESTY (read before recording)
 ----------------------------------------
-The MPU6050 is a +/-2 g MEMS accelerometer (~400 ug/rtHz), ~1e6x less sensitive
-than a broadband seismometer, and it measures ACCELERATION. It CANNOT detect real
-teleseismic earthquakes or reproduce a real P-then-S waveform. What the live
-sensor genuinely demonstrates is that the full causal pipeline + transmission
-gating run in real time on edge hardware and that a physical vibration triggers
-it. Real P-then-S phase picking is shown ONLY via `--source replay`, which streams
-REAL STEAD earthquake waveforms through the identical pipeline. Tap-vs-shake: a
-sustained shake is more model-like than a single sharp tap (the onset-energy
-envelope, not a real P coda). We do NOT pre-claim tap-vs-shake selectivity here;
-the console reports what actually fired. On synthetic/live accelerometer input the
-model is not tap-selective (a sharp tap triggers both gates) -- the selectivity
-result (3.08 vs 17.51 false-triggers/hr) is measured on REAL STEAD data.
+The MPU6050 is a consumer MEMS accelerometer. The MPU3050 is a gyroscope and
+measures angular rate, not seismic acceleration. Neither validates earthquake
+detection: live sensor modes demonstrate physical acquisition, causal inference,
+and transmission gating only. Genuine P/S behavior is shown only by `--source
+replay`, using real STEAD waveforms. The console reports what actually fired; no
+tap-vs-shake or field false-alarm claim is inferred from a live MEMS session.
 
 SOURCES
 -------
   --source smoke   deterministic synthetic accel baseline + injected transients;
                    no hardware, no dataset. Both gates exercised; counters diverge.
-  --source mpu6050 live I2C read from an MPU6050 (smbus2). Falls back to smoke if
-                   the device / library is unavailable (never crashes).
+  --source mpu6050 live I2C acceleration from an MPU6050 (smbus2).
+  --source mpu3050 live I2C angular rate from an MPU3050 (smbus2).
+                   Hardware modes fail clearly by default; --fallback-smoke opts
+                   into a synthetic fallback for presentation resilience.
   --source replay  streams outputs/demo/replay_traces.npz (REAL STEAD earthquakes,
                    verified pickable) through the SAME causal pipeline -- genuine
-                   P/S picks that the accelerometer cannot produce. Labeled REPLAY.
+                   P/S picks that the live motion sensors cannot produce. Labeled REPLAY.
 
 Six stages: (1) source -> raw (3,N) @100Hz; (2) causal preprocess + causal INT8
 inference, plus STA/LTA, both gates each hop; (3) transmission gating + byte
@@ -48,7 +44,7 @@ import io
 import json
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -75,7 +71,7 @@ DET_THRESHOLD = 0.80       # model detection gate (deploy.streaming.detection_th
 P_THRESHOLD = 0.30
 S_THRESHOLD = 0.30
 HOP_S = 0.5                # streaming hop (seconds)
-REFRACTORY_S = 12.0        # post-transmit cooldown: one packet per event, per gate
+REFRACTORY_S = 12.0        # trigger cooldown: at most one packet per event/gate
 DEMO_DIR = REPO / "outputs" / "demo"
 
 
@@ -110,15 +106,23 @@ class EdgeTrigger:
         self.last_fire_t = -1e18
 
 
-def serialize_packet(clip: np.ndarray, picks: dict, seg: str, t_s: float) -> int:
+def serialize_packet(
+    clip: np.ndarray,
+    picks: dict,
+    seg: str,
+    t_s: float,
+    *,
+    fs: float = 100.0,
+    gate: str = "event",
+) -> int:
     """Serialize ONE transmission packet the same way every time; return its
     real byte size. Payload = int16 clip + pick times + phase labels + header."""
     scale = float(np.max(np.abs(clip))) or 1.0
     clip_i16 = np.clip(clip / scale * 32767.0, -32768, 32767).astype(np.int16)
     header = json.dumps({
-        "seg": seg, "t_s": round(float(t_s), 3),
+        "seg": seg, "t_s": round(float(t_s), 3), "gate": gate,
         "p_s": picks.get("P"), "s_s": picks.get("S"),
-        "fs": 100, "scale": scale, "dtype": "int16",
+        "fs": float(fs), "scale": scale, "dtype": "int16",
     }).encode("utf-8")
     buf = io.BytesIO()
     np.savez_compressed(buf, clip=clip_i16, header=np.frombuffer(header, dtype=np.uint8))
@@ -136,12 +140,17 @@ def fmt_bytes(n: float) -> str:
 @dataclass
 class Counters:
     raw_bytes: float = 0.0
+    raw_uncompressed_bytes: float = 0.0
     stalta_bytes: float = 0.0
     model_bytes: float = 0.0
+    stalta_uncompressed_bytes: float = 0.0
+    model_uncompressed_bytes: float = 0.0
     stalta_count: int = 0
     model_count: int = 0
+    raw_count: int = 0
     stalta_false: int = 0
     model_false: int = 0
+    incomplete_packets: int = 0
     elapsed_samples: int = 0
 
 
@@ -154,11 +163,57 @@ class Hop:
     ratio: float
     picks: dict
     clip: np.ndarray
+    raw_chunk: np.ndarray
     in_event: object          # bool ground-truth, or None if unknown (live)
     seg_new: bool = False
     seg_total_s: float = 0.0
     seg_end: bool = False
     seg_summary: dict = None
+
+
+@dataclass
+class PendingTransmission:
+    gate: str
+    trigger_t_s: float
+    due_t_s: float
+    false: bool
+    seg: str
+
+
+class ContinuousWireCounter:
+    """Encode continuous input in the same fixed-duration packets as gated data.
+
+    This makes the bytes-on-wire comparison codec-for-codec instead of comparing
+    compressed event packets with an uncompressed arithmetic baseline.
+    """
+
+    def __init__(self, clip_samples: int, fs: float):
+        self.clip_samples = int(clip_samples)
+        self.fs = float(fs)
+        self.buffer = np.empty((3, 0), dtype=np.float32)
+        self.bytes = 0
+        self.packet_count = 0
+
+    def push(self, chunk: np.ndarray, seg: str, t_s: float) -> None:
+        chunk = np.asarray(chunk, dtype=np.float32)
+        if chunk.ndim != 2 or chunk.shape[0] != 3:
+            raise ValueError(f"continuous chunk must have shape (3,N), got {chunk.shape}")
+        self.buffer = np.concatenate([self.buffer, chunk], axis=1)
+        while self.buffer.shape[1] >= self.clip_samples:
+            clip = self.buffer[:, :self.clip_samples]
+            self.buffer = self.buffer[:, self.clip_samples:]
+            self.bytes += serialize_packet(
+                clip, {}, seg, t_s, fs=self.fs, gate="continuous"
+            )
+            self.packet_count += 1
+
+    def finish_segment(self, seg: str, t_s: float) -> None:
+        if self.buffer.shape[1]:
+            self.bytes += serialize_packet(
+                self.buffer, {}, seg, t_s, fs=self.fs, gate="continuous"
+            )
+            self.packet_count += 1
+            self.buffer = np.empty((3, 0), dtype=np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +254,31 @@ def smoke_signal(cfg, seed: int = 42):
     return raw.astype(np.float32), event_windows
 
 
-class MPU6050:
+def _s16(high: int, low: int) -> int:
+    value = (high << 8) | low
+    return value - 65536 if value >= 32768 else value
+
+
+class TimedI2CSensor:
+    """Small common interface for blocking, paced I2C sample acquisition."""
+
+    def read_sample(self) -> tuple[float, float, float]:
+        raise NotImplementedError
+
+    def read_block(self, n: int, fs: float) -> np.ndarray:
+        out = np.empty((3, n), dtype=np.float32)
+        dt = 1.0 / fs
+        deadline = time.perf_counter()
+        for i in range(n):
+            out[:, i] = self.read_sample()
+            deadline += dt
+            rem = deadline - time.perf_counter()
+            if rem > 0:
+                time.sleep(rem)
+        return out
+
+
+class MPU6050(TimedI2CSensor):
     """Minimal I2C MPU6050 reader (smbus2). +/-2 g (AFS_SEL=0), on-chip 100 Hz
     (SMPLRT_DIV=9 + DLPF). Axis convention (NOT calibration): az->Z, ax->N, ay->E."""
 
@@ -210,34 +289,60 @@ class MPU6050:
     ACCEL_CONFIG = 0x1C
     ACCEL_XOUT_H = 0x3B
 
-    def __init__(self, bus_id: int = 1):
-        from smbus2 import SMBus  # raises if unavailable -> caller falls back
+    def __init__(self, bus_id: int = 1, address: int = ADDR):
+        from smbus2 import SMBus  # raises if unavailable -> caller handles it
         self.bus = SMBus(bus_id)
-        self.bus.write_byte_data(self.ADDR, self.PWR_MGMT_1, 0x00)   # wake
-        self.bus.write_byte_data(self.ADDR, self.CONFIG, 0x03)       # DLPF ~44 Hz
-        self.bus.write_byte_data(self.ADDR, self.SMPLRT_DIV, 0x09)   # 1kHz/(1+9)=100Hz
-        self.bus.write_byte_data(self.ADDR, self.ACCEL_CONFIG, 0x00)  # +/-2 g
+        self.address = int(address)
+        self.bus.write_byte_data(self.address, self.PWR_MGMT_1, 0x00)   # wake
+        self.bus.write_byte_data(self.address, self.CONFIG, 0x03)       # DLPF ~44 Hz
+        self.bus.write_byte_data(self.address, self.SMPLRT_DIV, 0x09)   # 1kHz/(1+9)=100Hz
+        self.bus.write_byte_data(self.address, self.ACCEL_CONFIG, 0x00)  # +/-2 g
 
-    def _read_g(self):
-        d = self.bus.read_i2c_block_data(self.ADDR, self.ACCEL_XOUT_H, 6)
-        def s16(h, l):
-            v = (h << 8) | l
-            return v - 65536 if v >= 32768 else v
-        ax = s16(d[0], d[1]) / 16384.0
-        ay = s16(d[2], d[3]) / 16384.0
-        az = s16(d[4], d[5]) / 16384.0
+    def read_sample(self):
+        d = self.bus.read_i2c_block_data(self.address, self.ACCEL_XOUT_H, 6)
+        ax = _s16(d[0], d[1]) / 16384.0
+        ay = _s16(d[2], d[3]) / 16384.0
+        az = _s16(d[4], d[5]) / 16384.0
         return az, ax, ay   # Z, N, E convention
 
-    def read_block(self, n: int, fs: float) -> np.ndarray:
-        out = np.empty((3, n), dtype=np.float32)
-        dt = 1.0 / fs
-        for i in range(n):
-            t0 = time.perf_counter()
-            out[:, i] = self._read_g()
-            rem = dt - (time.perf_counter() - t0)
-            if rem > 0:
-                time.sleep(rem)
-        return out
+
+class MPU3050(TimedI2CSensor):
+    """Minimal MPU3050 gyroscope reader.
+
+    Output is X/Y/Z angular rate in degrees/second. These channels are deliberately
+    not relabeled Z/N/E: a gyroscope is a live motion-pipeline demonstration, not
+    a substitute for the translational seismic input used to train the model.
+    Registers and the 131 LSB/(degree/s) scale follow the InvenSense MPU-3050
+    product specification and register map (FS_SEL=0, +/-250 degree/s).
+    """
+
+    ADDR = 0x68
+    WHO_AM_I = 0x00
+    SMPLRT_DIV = 0x15
+    DLPF_FS_SYNC = 0x16
+    GYRO_XOUT_H = 0x1D
+    PWR_MGM = 0x3E
+    SENSITIVITY_LSB_PER_DPS = 131.0
+
+    def __init__(self, bus_id: int = 1, address: int = ADDR):
+        from smbus2 import SMBus  # raises if unavailable -> caller handles it
+        self.bus = SMBus(bus_id)
+        self.address = int(address)
+        self.bus.write_byte_data(self.address, self.PWR_MGM, 0x00)
+        time.sleep(0.05)
+        # FS_SEL=0 (+/-250 dps), DLPF_CFG=3 (~42 Hz, 1 kHz internal sample rate).
+        self.bus.write_byte_data(self.address, self.DLPF_FS_SYNC, 0x03)
+        self.bus.write_byte_data(self.address, self.SMPLRT_DIV, 0x09)
+        self.who_am_i = self.bus.read_byte_data(self.address, self.WHO_AM_I)
+
+    def read_sample(self):
+        d = self.bus.read_i2c_block_data(self.address, self.GYRO_XOUT_H, 6)
+        scale = self.SENSITIVITY_LSB_PER_DPS
+        return (
+            _s16(d[0], d[1]) / scale,
+            _s16(d[2], d[3]) / scale,
+            _s16(d[4], d[5]) / scale,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -269,37 +374,129 @@ def _window_picks(probs, fs, seg_t0_s):
     return out
 
 
-def live_hops(cfg, raw_full, event_windows, predict, warmup_s, hop, window):
-    """Rolling-buffer live path: prefill with real ambient, then each hop take the
-    last `window` raw samples, causal-preprocess them (warm-started on the ambient
-    snapshot, never zeros), run the causal INT8 model, and read the right edge."""
+def _tile_tail(x: np.ndarray, length: int) -> np.ndarray:
+    if x.shape[1] < 1:
+        raise ValueError("cannot warm-start a rolling buffer from no samples")
+    return np.tile(x, (1, length // x.shape[1] + 1))[:, -length:].astype(np.float32)
+
+
+def _online_hops(
+    cfg,
+    chunks,
+    ambient,
+    total_samples,
+    event_windows,
+    predict,
+    hop,
+    window,
+    seg="LIVE",
+):
+    """Process newly acquired chunks once with persistent causal state.
+
+    ``chunks`` stays lazy, so a physical sensor can acquire one hop, infer it, and
+    only then acquire the next. Both processed and raw rolling buffers are seeded
+    from measured ambient samples rather than zeros.
+    """
     fs = float(cfg.data.sampling_rate)
-    ambient = raw_full[:, :warmup_s].astype(np.float32)
-    buf = np.tile(ambient, (1, window // ambient.shape[1] + 1))[:, -window:].astype(np.float32)
-    total_s = raw_full.shape[1] / fs
-    pos = 0
-    n = raw_full.shape[1]
+    ambient = np.asarray(ambient, dtype=np.float32)
+    pre = CausalPreprocessor(
+        cfg,
+        warmup_samples=min(int(fs), ambient.shape[1]),
+        initial_background=ambient,
+    )
+    processed_buf = _tile_tail(pre.process(ambient), window)
+    raw_model_buf = _tile_tail(ambient, window)
+    clip_n = int(round((CLIP_PRE_S + CLIP_POST_S) * fs))
+    # Packet history is never padded: an early trigger is dropped unless three
+    # seconds of genuinely acquired pre-trigger data exists.
+    raw_clip_buf = ambient[:, -clip_n:].copy()
+    total_s = total_samples / fs
+    pos = ambient.shape[1]
     first = True
-    while pos < n:
-        chunk = raw_full[:, pos:pos + hop]
+    for chunk in chunks:
+        chunk = np.asarray(chunk, dtype=np.float32)
+        if chunk.ndim != 2 or chunk.shape[0] != 3:
+            raise ValueError(f"source chunk must have shape (3,N), got {chunk.shape}")
         h = chunk.shape[1]
-        buf = np.roll(buf, -h, axis=1)
-        buf[:, -h:] = chunk
+        if h == 0:
+            continue
+        processed = pre.process(chunk)
+        processed_buf = np.roll(processed_buf, -h, axis=1)
+        processed_buf[:, -h:] = processed
+        raw_model_buf = np.roll(raw_model_buf, -h, axis=1)
+        raw_model_buf[:, -h:] = chunk
+        raw_clip_buf = np.concatenate([raw_clip_buf, chunk], axis=1)[:, -clip_n:]
         pos += h
         t_s = pos / fs
-        pre = CausalPreprocessor(cfg, warmup_samples=min(int(fs), warmup_s),
-                                 initial_background=ambient)
-        probs = predict(pre.process(buf)[None, ...])[0]
+        probs = predict(processed_buf[None, ...])[0]
         det = float(probs[0, -h:].max())
-        ratio = float(_stalta(buf, fs)[-h:].max())
+        ratio = float(_stalta(raw_model_buf, fs)[-h:].max())
         picks = {}   # live/synthetic: detection only; real P/S is shown via --source replay
         in_event = None
         if event_windows is not None:
             in_event = any(a <= t_s <= b for a, b in event_windows)
-        clip = buf[:, -int((CLIP_PRE_S + CLIP_POST_S) * fs):]
-        yield Hop("LIVE", t_s, float(np.abs(chunk).max()), det, ratio, picks, clip,
-                  in_event, seg_new=first, seg_total_s=total_s)
+        accounting_chunk = np.concatenate([ambient, chunk], axis=1) if first else chunk
+        yield Hop(
+            seg=seg,
+            t_s=t_s,
+            amp=float(np.abs(chunk).max()),
+            det=det,
+            ratio=ratio,
+            picks=picks,
+            clip=raw_clip_buf.copy(),
+            raw_chunk=accounting_chunk,
+            in_event=in_event,
+            seg_new=first,
+            seg_total_s=total_s,
+            seg_end=pos >= total_samples,
+        )
         first = False
+
+
+def live_hops(cfg, raw_full, event_windows, predict, warmup_s, hop, window):
+    """Array-backed version of the persistent online path (smoke/tests)."""
+    raw_full = np.asarray(raw_full, dtype=np.float32)
+    n = raw_full.shape[1]
+    warmup_n = min(max(1, int(warmup_s)), n)
+    ambient = raw_full[:, :warmup_n]
+
+    def chunks():
+        for pos in range(warmup_n, n, hop):
+            yield raw_full[:, pos:min(pos + hop, n)]
+
+    return _online_hops(
+        cfg, chunks(), ambient, n, event_windows, predict, hop, window
+    )
+
+
+def device_hops(cfg, dev, args, predict, warmup_n, hop, window):
+    """Interleave physical acquisition and inference one hop at a time."""
+    fs = float(cfg.data.sampling_rate)
+    capture_n = int(round(args.duration_s * fs))
+    print(
+        f"[{args.source}] live acquisition {args.duration_s:.0f}s @ {fs:.0f}Hz "
+        f"after {args.warmup_s:.0f}s measured ambient warm-up"
+    )
+    ambient = dev.read_block(warmup_n, fs)
+
+    def chunks():
+        remaining = capture_n
+        while remaining > 0:
+            n = min(hop, remaining)
+            yield dev.read_block(n, fs)
+            remaining -= n
+
+    return _online_hops(
+        cfg,
+        chunks(),
+        ambient,
+        warmup_n + capture_n,
+        None,
+        predict,
+        hop,
+        window,
+        seg=args.source.upper(),
+    )
 
 
 def replay_hops(cfg, bundle, predict, hop):
@@ -344,9 +541,21 @@ def replay_hops(cfg, bundle, predict, hop):
             picks = {"P": seg_picks["P"] if (seg_picks["P"] is not None and seg_picks["P"] <= t_s) else None,
                      "S": seg_picks["S"] if (seg_picks["S"] is not None and seg_picks["S"] <= t_s) else None}
             is_last = pos == starts[-1]
-            yield Hop(seg, t_s, float(np.abs(raw[:, pos:end]).max()), det, rat, picks,
-                      clip, in_event, seg_new=(pos == 0), seg_total_s=n / fs,
-                      seg_end=is_last, seg_summary=summary if is_last else None)
+            yield Hop(
+                seg=seg,
+                t_s=t_s,
+                amp=float(np.abs(raw[:, pos:end]).max()),
+                det=det,
+                ratio=rat,
+                picks=picks,
+                clip=clip,
+                raw_chunk=raw[:, pos:end],
+                in_event=in_event,
+                seg_new=(pos == 0),
+                seg_total_s=n / fs,
+                seg_end=is_last,
+                seg_summary=summary if is_last else None,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -357,55 +566,88 @@ def run(hops, cfg, args, source_label, plotter=None):
     c = Counters()
     model_trig = EdgeTrigger(DET_THRESHOLD, off=0.6, refractory_s=REFRACTORY_S)
     stalta_trig = EdgeTrigger(STA_LTA_ON, off=STA_LTA_ON, refractory_s=REFRACTORY_S)
-    hop_samples = int(round(HOP_S * fs))
+    clip_samples = int(round((CLIP_PRE_S + CLIP_POST_S) * fs))
+    wire = ContinuousWireCounter(clip_samples, fs)
+    pending: list[PendingTransmission] = []
     last_status_t = -1e9
-    cur_seg = None
     transmissions = []
 
     print(f"\n=== EDGE TRANSMISSION-GATING DEMO  [source: {source_label}] ===")
     print(f"gates: MODEL det>={DET_THRESHOLD:.2f}   STA/LTA ratio>={STA_LTA_ON:.1f} "
           f"(sta={STA_S}s lta={LTA_S}s)   packet=3s+7s clip, {BYTES_PER_SAMPLE}B/sample")
-    print(f"raw-continuous baseline = every digitized sample x 3ch x {BYTES_PER_SAMPLE}B\n")
+    print("wire comparison = identical int16 + compressed-NPZ encoding for continuous "
+          "and gated paths\n")
 
     for h in hops:
         if h.seg_new:
+            if pending:
+                c.incomplete_packets += len(pending)
+                pending.clear()
             model_trig.reset()
             stalta_trig.reset()
-            cur_seg = h.seg
             last_status_t = -1e9
             print(f"\n--- {h.seg}  (segment length {h.seg_total_s:.0f}s) ---")
 
-        c.elapsed_samples += hop_samples
-        c.raw_bytes = c.elapsed_samples * 3 * BYTES_PER_SAMPLE
+        new_samples = int(h.raw_chunk.shape[1])
+        c.elapsed_samples += new_samples
+        c.raw_uncompressed_bytes += new_samples * 3 * BYTES_PER_SAMPLE
+        wire.push(h.raw_chunk, h.seg, h.t_s)
+        c.raw_bytes = wire.bytes
+        c.raw_count = wire.packet_count
 
         m_fire = model_trig.update(h.det, h.t_s)
         s_fire = stalta_trig.update(h.ratio, h.t_s)
 
         if s_fire:
-            pkt = serialize_packet(h.clip, h.picks, h.seg, h.t_s)
-            c.stalta_bytes += pkt
-            c.stalta_count += 1
             false = (h.in_event is False)
-            c.stalta_false += int(false)
             tag = "  [FALSE ALARM]" if false else ("  [event]" if h.in_event else "")
-            print(f"  \U0001F4E1 STA/LTA transmit @{h.t_s:6.1f}s  packet={fmt_bytes(pkt):>7s}{tag}")
-            transmissions.append(("stalta", h.t_s, pkt, false))
+            print(f"  \U0001F514 STA/LTA trigger  @{h.t_s:6.1f}s; collecting {CLIP_POST_S:g}s post-trigger{tag}")
+            pending.append(PendingTransmission(
+                "stalta", h.t_s, h.t_s + CLIP_POST_S, false, h.seg
+            ))
         if m_fire:
-            pkt = serialize_packet(h.clip, h.picks, h.seg, h.t_s)
-            c.model_bytes += pkt
-            c.model_count += 1
             false = (h.in_event is False)
-            c.model_false += int(false)
-            pk = []
-            if h.picks.get("P") is not None:
-                pk.append(f"P@{h.picks['P']:.1f}s")
-            if h.picks.get("S") is not None:
-                pk.append(f"S@{h.picks['S']:.1f}s")
-            picks_txt = " ".join(pk) if pk else "(detection; no clean P/S)"
             tag = "  [FALSE ALARM]" if false else ("  [event]" if h.in_event else "")
-            print(f"  \U0001F4E1 MODEL   transmit @{h.t_s:6.1f}s  packet={fmt_bytes(pkt):>7s}"
-                  f"  {picks_txt}{tag}")
-            transmissions.append(("model", h.t_s, pkt, false))
+            print(f"  \U0001F514 MODEL trigger    @{h.t_s:6.1f}s; collecting {CLIP_POST_S:g}s post-trigger{tag}")
+            pending.append(PendingTransmission(
+                "model", h.t_s, h.t_s + CLIP_POST_S, false, h.seg
+            ))
+
+        ready = [p for p in pending if p.seg == h.seg and h.t_s >= p.due_t_s]
+        for p in ready:
+            if h.clip.shape[1] != clip_samples:
+                c.incomplete_packets += 1
+                pending.remove(p)
+                continue
+            pkt = serialize_packet(
+                h.clip, h.picks, h.seg, p.trigger_t_s, fs=fs, gate=p.gate
+            )
+            payload = int(h.clip.size * BYTES_PER_SAMPLE)
+            if p.gate == "stalta":
+                c.stalta_bytes += pkt
+                c.stalta_uncompressed_bytes += payload
+                c.stalta_count += 1
+                c.stalta_false += int(p.false)
+            else:
+                c.model_bytes += pkt
+                c.model_uncompressed_bytes += payload
+                c.model_count += 1
+                c.model_false += int(p.false)
+            tag = "  [FALSE ALARM]" if p.false else ""
+            print(
+                f"  \U0001F4E1 {p.gate.upper():7s} transmit @{h.t_s:6.1f}s "
+                f"(trigger {p.trigger_t_s:5.1f}s) packet={fmt_bytes(pkt):>7s}{tag}"
+            )
+            transmissions.append({
+                "gate": p.gate,
+                "trigger_t_s": round(p.trigger_t_s, 2),
+                "transmit_t_s": round(h.t_s, 2),
+                "bytes": int(pkt),
+                "uncompressed_payload_bytes": payload,
+                "clip_samples": int(h.clip.shape[1]),
+                "false": bool(p.false),
+            })
+            pending.remove(p)
 
         if h.t_s - last_status_t >= 1.0:
             last_status_t = h.t_s
@@ -424,17 +666,27 @@ def run(hops, cfg, args, source_label, plotter=None):
             print(f"     ✓ model recovered: P {fp(s['model_p'])}  S {fp(s['model_s'])}"
                   f"   (catalog P {fp(s['catalog_p'])}  S {fp(s['catalog_s'])})  [REAL STEAD]")
 
+        if h.seg_end:
+            wire.finish_segment(h.seg, h.t_s)
+            c.raw_bytes = wire.bytes
+            c.raw_count = wire.packet_count
+            incomplete = [p for p in pending if p.seg == h.seg]
+            if incomplete:
+                c.incomplete_packets += len(incomplete)
+                pending = [p for p in pending if p.seg != h.seg]
+                print(f"  [segment ended before {len(incomplete)} pending packet(s) collected full post-trigger data]")
+
         if plotter is not None:
             plotter.update(h, c, stalta_trig.armed, model_trig.armed)
 
-        if args.speed > 0 and not args.fast:
-            time.sleep((hop_samples / fs) / args.speed)
+        if args.source in ("smoke", "replay") and args.speed > 0 and not args.fast:
+            time.sleep((new_samples / fs) / args.speed)
 
-    report = build_report(c, source_label, transmissions)
+    report = build_report(c, source_label, transmissions, fs)
     return c, report
 
 
-def build_report(c: Counters, source_label: str, transmissions):
+def build_report(c: Counters, source_label: str, transmissions, fs: float = 100.0):
     def ratio(a, b):
         return None if b <= 0 else round(a / b, 1)
     return {
@@ -443,25 +695,30 @@ def build_report(c: Counters, source_label: str, transmissions):
         "packet_clip_s": CLIP_PRE_S + CLIP_POST_S,
         "gates": {"model_detection_threshold": DET_THRESHOLD,
                   "stalta": {"sta_s": STA_S, "lta_s": LTA_S, "on": STA_LTA_ON}},
-        "elapsed_seconds": round(c.elapsed_samples / 100.0, 1),
+        "elapsed_seconds": round(c.elapsed_samples / fs, 1),
+        "encoding": "float input scaled to int16 per packet, then np.savez_compressed; same codec for all paths",
         "bytes": {
             "raw_continuous": int(c.raw_bytes),
             "stalta_gated": int(c.stalta_bytes),
             "model_gated": int(c.model_bytes),
         },
+        "uncompressed_payload_bytes": {
+            "raw_continuous": int(c.raw_uncompressed_bytes),
+            "stalta_gated": int(c.stalta_uncompressed_bytes),
+            "model_gated": int(c.model_uncompressed_bytes),
+        },
         "transmissions": {
+            "raw_continuous": {"count": c.raw_count},
             "stalta": {"count": c.stalta_count, "false": c.stalta_false},
             "model": {"count": c.model_count, "false": c.model_false},
+            "incomplete_dropped": c.incomplete_packets,
         },
         "reduction_vs_raw": {
             "stalta": ratio(c.raw_bytes, c.stalta_bytes),
             "model": ratio(c.raw_bytes, c.model_bytes),
         },
         "model_vs_stalta_bytes_x": ratio(c.stalta_bytes, c.model_bytes),
-        "transmission_log": [
-            {"gate": g, "t_s": round(t, 2), "bytes": b, "false": bool(f)}
-            for g, t, b, f in transmissions
-        ],
+        "transmission_log": transmissions,
     }
 
 
@@ -483,7 +740,7 @@ def make_bytes_chart(report, path: Path):
               "Model gated\n(causal INT8 U-Net)"]
     colors = [CRITICAL, WARNING, GOOD]
 
-    fig, ax = plt.subplots(figsize=(9, 4.6))
+    fig, ax = plt.subplots(figsize=(10, 5.0))
     fig.patch.set_facecolor(SURFACE)
     ax.set_facecolor(SURFACE)
     y = np.arange(3)[::-1]
@@ -512,10 +769,14 @@ def make_bytes_chart(report, path: Path):
     ax.set_yticks(y)
     ax.set_yticklabels(labels, fontsize=10.5, color=INK)
     ax.set_xlim(0, xmax * 1.22)
-    ax.set_xlabel(f"Bytes transmitted over the session  ({BYTES_PER_SAMPLE} B/sample)",
+    ax.set_xlabel("Encoded wire bytes (same int16 + compressed-NPZ codec for every path)",
                   fontsize=10, color=MUTED)
     mvs = report.get("model_vs_stalta_bytes_x")
-    sub = f"{report['source']}  •  {report['elapsed_seconds']:.0f}s"
+    display_source = (
+        "real STEAD replay" if report["source"].startswith("replay")
+        else report["source"]
+    )
+    sub = f"{display_source}  •  {report['elapsed_seconds']:.0f}s"
     if mvs:
         sub += f"  •  model sends {mvs}x fewer bytes than STA/LTA"
     ax.set_title("Bytes on the wire: transmission gating\n" + sub,
@@ -545,6 +806,7 @@ class Plotter:
         self.plt = plt
         self.save_frame = save_frame
         self.window_s = window_s
+        self.fs = float(fs)
         self.T, self.A, self.D, self.R = [], [], [], []
         self.tx_model, self.tx_stalta = [], []
         self.fig, self.axes = plt.subplots(
@@ -557,7 +819,7 @@ class Plotter:
         self._draw_count = 0
 
     def update(self, h, c, sl_armed, md_armed):
-        self.T.append(c.elapsed_samples / 100.0)   # monotonic session clock
+        self.T.append(c.elapsed_samples / self.fs)   # monotonic session clock
         self.A.append(abs(h.amp))
         self.D.append(h.det)
         self.R.append(min(h.ratio, 10.0))
@@ -609,8 +871,11 @@ class Plotter:
 
 # ---------------------------------------------------------------------------
 def parse_args():
-    p = argparse.ArgumentParser(description="Live MPU6050 / replay edge demo.")
-    p.add_argument("--source", choices=["mpu6050", "smoke", "replay"], default="smoke")
+    p = argparse.ArgumentParser(description="Live MPU3050/MPU6050 or replay edge demo.")
+    p.add_argument(
+        "--source", choices=["mpu3050", "mpu6050", "smoke", "replay"],
+        default="smoke",
+    )
     p.add_argument("--trace", default=str(DEMO_DIR / "replay_traces.npz"),
                    help="replay bundle (default: outputs/demo/replay_traces.npz)")
     p.add_argument("--onnx", default=str(DEMO_DIR / "causal_stage3_int8.onnx"))
@@ -626,7 +891,14 @@ def parse_args():
     p.add_argument("--report", default=str(DEMO_DIR / "bytes_report.json"))
     p.add_argument("--chart", default=str(DEMO_DIR / "bytes_comparison.png"))
     p.add_argument("--duration-s", type=float, default=90.0,
-                   help="live mpu6050 capture length")
+                   help="live hardware acquisition length after ambient warm-up")
+    p.add_argument("--i2c-bus", type=int, default=1)
+    p.add_argument("--i2c-address", type=lambda value: int(value, 0), default=0x68,
+                   help="sensor I2C address, decimal or 0x-prefixed (default: 0x68)")
+    p.add_argument(
+        "--fallback-smoke", action="store_true",
+        help="if a requested hardware source is unavailable, explicitly fall back to smoke",
+    )
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
 
@@ -637,7 +909,9 @@ def main():
     fs = float(cfg.data.sampling_rate)
     window = int(cfg.data.window_samples)
     hop = int(round(HOP_S * fs))
-    warmup_s = int(round(args.warmup_s * fs))
+    warmup_n = int(round(args.warmup_s * fs))
+    if warmup_n < 1:
+        raise SystemExit("--warmup-s must provide at least one measured sample")
 
     onnx_path = Path(args.onnx)
     if not onnx_path.is_file():
@@ -652,20 +926,31 @@ def main():
         bundle = np.load(args.trace, allow_pickle=True)
         source_label = f"replay ({args.trace.split('/')[-1]}, REAL STEAD)"
         hops = replay_hops(cfg, bundle, predict, hop)
-    else:
-        if args.source == "mpu6050":
-            try:
-                dev = MPU6050()
-                source_label = "mpu6050 (live I2C, +/-2g MEMS)"
-                raw_full, event_windows = _mpu_capture(dev, cfg, args, warmup_s)
-            except Exception as exc:
-                print(f"[mpu6050 unavailable: {exc.__class__.__name__}: {exc}] "
-                      f"-> falling back to smoke")
-                source_label = "smoke (mpu6050 fallback)"
-                raw_full, event_windows = smoke_signal(cfg, args.seed)
-        else:
+    elif args.source in ("mpu3050", "mpu6050"):
+        try:
+            if args.source == "mpu3050":
+                dev = MPU3050(args.i2c_bus, args.i2c_address)
+                source_label = (
+                    f"mpu3050 (live I2C 0x{args.i2c_address:02x}, XYZ angular rate dps; "
+                    "motion demo, not seismic validation)"
+                )
+            else:
+                dev = MPU6050(args.i2c_bus, args.i2c_address)
+                source_label = "mpu6050 (live I2C, +/-2g acceleration; motion demo)"
+            hops = device_hops(cfg, dev, args, predict, warmup_n, hop, window)
+        except Exception as exc:
+            message = f"{args.source} unavailable: {exc.__class__.__name__}: {exc}"
+            if not args.fallback_smoke:
+                raise SystemExit(message + " (use --fallback-smoke to opt into synthetic fallback)")
+            print(f"[{message}] -> explicit smoke fallback")
+            source_label = f"smoke ({args.source} fallback)"
             raw_full, event_windows = smoke_signal(cfg, args.seed)
-        hops = live_hops(cfg, raw_full, event_windows, predict, warmup_s, hop, window)
+            hops = live_hops(
+                cfg, raw_full, event_windows, predict, warmup_n, hop, window
+            )
+    else:
+        raw_full, event_windows = smoke_signal(cfg, args.seed)
+        hops = live_hops(cfg, raw_full, event_windows, predict, warmup_n, hop, window)
 
     plotter = None
     if args.plot or args.save_frame:
@@ -696,16 +981,6 @@ def main():
     if report["model_vs_stalta_bytes_x"]:
         print(f"  model sends {report['model_vs_stalta_bytes_x']}x fewer bytes than STA/LTA")
     print(f"\nwrote {args.report}\n      {args.chart}")
-
-
-def _mpu_capture(dev, cfg, args, warmup_s):
-    """Capture a live MPU6050 session into a (3,N) array (no scripted events)."""
-    fs = float(cfg.data.sampling_rate)
-    n = int(args.duration_s * fs)
-    print(f"[mpu6050] capturing {args.duration_s:.0f}s live @ {fs:.0f}Hz "
-          f"(warm-up {args.warmup_s:.0f}s ambient)...")
-    raw = dev.read_block(n, fs)
-    return raw, None   # event_windows=None: live has no ground truth
 
 
 if __name__ == "__main__":

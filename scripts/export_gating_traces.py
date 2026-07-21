@@ -15,8 +15,9 @@ Outputs (into outputs/demo/):
   gating_traces.json   the raw data bundle (also handy for other tooling)
   gating_demo.html     self-contained page (data inlined) -- just open it
 
-Everything is reused from demo_edge.py (no reimplemented scoring/gating), so the
-numbers match bytes_report.json exactly.
+Inference, trigger, packet, and continuous-wire primitives are imported from
+``demo_edge.py``. This exporter drives those primitives over the replay arrays
+and should therefore match ``bytes_report.json`` exactly.
 """
 
 from __future__ import annotations
@@ -107,14 +108,18 @@ def build_bundle(cfg, bundle, predict, fs, bins=1100):
     time_arr = bundle["source_origin_time"] if "source_origin_time" in bundle.files else None
 
     traces = []
-    # continuous session counters (Act 2) -- reproduces demo_edge.build_report,
-    # which resets both triggers per segment (seg_new) just as we do here.
-    raw_bytes = stalta_bytes = model_bytes = 0.0
+    # Continuous and gated paths use the same int16 + compressed-NPZ encoder.
+    wire = D.ContinuousWireCounter(clip_n, fs)
+    raw_uncompressed = stalta_uncompressed = model_uncompressed = 0.0
+    stalta_bytes = model_bytes = 0.0
     stalta_count = model_count = stalta_false = model_false = 0
+    incomplete_packets = 0
+    elapsed_samples = 0
 
     for ti in range(n_trace):
         raw = raws[ti].astype(np.float32)
         n = raw.shape[1]
+        seg = f"REPLAY {ti+1}/{n_trace} {ids[ti]}"
         pre = D.CausalPreprocessor(cfg, warmup_samples=min(int(fs), hop))
         probs = D.causal_stream_probabilities(
             raw, predict, pre, chunk_samples=500).probabilities  # (3, N): det, P, S
@@ -131,28 +136,65 @@ def build_bundle(cfg, bundle, predict, fs, bins=1100):
         m_trig = D.EdgeTrigger(D.DET_THRESHOLD, off=0.6, refractory_s=D.REFRACTORY_S)
         s_trig = D.EdgeTrigger(D.STA_LTA_ON, off=D.STA_LTA_ON, refractory_s=D.REFRACTORY_S)
         fires = []
+        pending = []
         for pos in range(0, n, hop):
             end = min(pos + hop, n)
             t_s = end / fs
-            raw_bytes += hop * 3 * D.BYTES_PER_SAMPLE
+            raw_chunk = raw[:, pos:end]
+            elapsed_samples += raw_chunk.shape[1]
+            raw_uncompressed += raw_chunk.size * D.BYTES_PER_SAMPLE
+            wire.push(raw_chunk, seg, t_s)
             det = float(probs[0, pos:end].max())
             rat = float(ratio[pos:end].max())
             in_event = any(a <= t_s <= b for a, b in ew)
-            clip = raw[:, max(0, end - clip_n):end]
             picks = {
                 "P": seg_picks["P"] if (seg_picks["P"] is not None and seg_picks["P"] <= t_s) else None,
                 "S": seg_picks["S"] if (seg_picks["S"] is not None and seg_picks["S"] <= t_s) else None,
             }
             if s_trig.update(rat, t_s):
-                b = D.serialize_packet(clip, picks, f"REPLAY {ti}", t_s)
                 false = (in_event is False)
-                stalta_bytes += b; stalta_count += 1; stalta_false += int(false)
-                fires.append({"gate": "stalta", "t": round(t_s, 2), "bytes": b, "false": false})
+                pending.append(D.PendingTransmission(
+                    "stalta", t_s, t_s + D.CLIP_POST_S, false, seg
+                ))
             if m_trig.update(det, t_s):
-                b = D.serialize_packet(clip, picks, f"REPLAY {ti}", t_s)
                 false = (in_event is False)
-                model_bytes += b; model_count += 1; model_false += int(false)
-                fires.append({"gate": "model", "t": round(t_s, 2), "bytes": b, "false": false})
+                pending.append(D.PendingTransmission(
+                    "model", t_s, t_s + D.CLIP_POST_S, false, seg
+                ))
+
+            ready = [p for p in pending if t_s >= p.due_t_s]
+            for p in ready:
+                clip = raw[:, end - clip_n:end] if end >= clip_n else raw[:, :end]
+                if clip.shape[1] != clip_n:
+                    incomplete_packets += 1
+                    pending.remove(p)
+                    continue
+                b = D.serialize_packet(
+                    clip, picks, seg, p.trigger_t_s,
+                    fs=fs, gate=p.gate,
+                )
+                payload = clip.size * D.BYTES_PER_SAMPLE
+                if p.gate == "stalta":
+                    stalta_bytes += b
+                    stalta_uncompressed += payload
+                    stalta_count += 1
+                    stalta_false += int(p.false)
+                else:
+                    model_bytes += b
+                    model_uncompressed += payload
+                    model_count += 1
+                    model_false += int(p.false)
+                fires.append({
+                    "gate": p.gate,
+                    "t": round(t_s, 2),
+                    "trigger_t": round(p.trigger_t_s, 2),
+                    "bytes": b,
+                    "false": p.false,
+                })
+                pending.remove(p)
+
+        wire.finish_segment(seg, n / fs)
+        incomplete_packets += len(pending)
 
         # --- decimate the drawable streams onto one shared time axis ----------
         edges = np.linspace(0, n, bins + 1).astype(int)
@@ -191,18 +233,26 @@ def build_bundle(cfg, bundle, predict, fs, bins=1100):
         return None if b <= 0 else round(a / b, 1)
 
     session = {
-        "elapsed_seconds": round(raw_bytes / (3 * D.BYTES_PER_SAMPLE) / fs, 1),
+        "elapsed_seconds": round(elapsed_samples / fs, 1),
+        "encoding": "float input scaled to int16 per packet, then np.savez_compressed; same codec for all paths",
         "bytes": {
-            "raw_continuous": int(raw_bytes),
+            "raw_continuous": int(wire.bytes),
             "stalta_gated": int(stalta_bytes),
             "model_gated": int(model_bytes),
         },
-        "reduction_vs_raw": {"stalta": rr(raw_bytes, stalta_bytes),
-                             "model": rr(raw_bytes, model_bytes)},
+        "uncompressed_payload_bytes": {
+            "raw_continuous": int(raw_uncompressed),
+            "stalta_gated": int(stalta_uncompressed),
+            "model_gated": int(model_uncompressed),
+        },
+        "reduction_vs_raw": {"stalta": rr(wire.bytes, stalta_bytes),
+                             "model": rr(wire.bytes, model_bytes)},
         "model_vs_stalta_bytes_x": rr(stalta_bytes, model_bytes),
         "transmissions": {
+            "raw_continuous": {"count": wire.packet_count},
             "stalta": {"count": stalta_count, "false": stalta_false},
             "model": {"count": model_count, "false": model_false},
+            "incomplete_dropped": incomplete_packets,
         },
     }
 
